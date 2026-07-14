@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0d1117">
+<title>ContaRep — Rep counter live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d1117; --card:#151c25; --card2:#1b2431; --line:#26303e;
+    --txt:#f2f5f8; --dim:#8b98a5; --acc:#38e07b; --acc-dark:#1f9e54;
+    --warn:#ff5d5d; --amber:#ffb02e; --blue:#4aa8ff;
+    --r:18px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--txt);
+    font-family:'Barlow',system-ui,-apple-system,sans-serif; touch-action:manipulation; min-height:100%}
+  #app{max-width:820px; margin:0 auto; padding:16px 14px 90px}
+  h1,h2,h3,.disp{font-family:'Barlow Condensed','Barlow',sans-serif; letter-spacing:.02em}
+  input,textarea{user-select:text; -webkit-user-select:text}
+  .logo{display:flex; align-items:center; gap:10px; margin:8px 0 4px}
+  .logo .mark{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--acc),#19b55f);
+    display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed';font-weight:700;
+    color:#07270f;font-size:24px}
+  .logo b{font-family:'Barlow Condensed';font-size:30px;font-weight:700}
+  .logo b i{color:var(--acc);font-style:normal}
+  .tag{color:var(--dim);font-size:14px;margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin:12px 0}
+  .card h3{margin:0 0 10px;font-size:20px}
+  .muted{color:var(--dim);font-size:14px;line-height:1.45}
+  .row{display:flex;gap:10px;align-items:center}
+  .grow{flex:1}
+  .btn{display:flex;align-items:center;justify-content:center;gap:8px;border:none;border-radius:14px;
+    font-family:'Barlow Condensed';font-weight:600;font-size:20px;letter-spacing:.03em;cursor:pointer;
+    padding:14px 18px;color:#07270f;background:var(--acc);width:100%;transition:transform .05s}
+  .btn:active{transform:scale(.97)}
+  .btn.sec{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+  .btn.warn{background:transparent;color:var(--warn);border:1px solid var(--warn)}
+  .btn.small{width:auto;padding:9px 14px;font-size:17px;border-radius:11px}
+  .btn:disabled{opacity:.4}
+  input[type=text]{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:12px;
+    color:var(--txt);font-size:18px;padding:12px 14px;outline:none;font-family:'Barlow'}
+  input[type=text]:focus{border-color:var(--acc)}
+  input.code{letter-spacing:.35em;text-transform:uppercase;font-family:'Barlow Condensed';font-size:24px;text-align:center}
+  .rolegrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .role{background:var(--card2);border:1px solid var(--line);border-radius:16px;padding:16px 12px;text-align:center;cursor:pointer}
+  .role:active{transform:scale(.97)}
+  .role .ic{font-size:30px}
+  .role b{display:block;font-family:'Barlow Condensed';font-size:20px;margin-top:6px}
+  .role span{color:var(--dim);font-size:12.5px;display:block;margin-top:3px;line-height:1.3}
+  .codebox{font-family:'Barlow Condensed';font-weight:700;font-size:52px;letter-spacing:.28em;
+    text-align:center;padding:10px 0 4px;color:var(--acc)}
+  #dot{position:fixed;top:12px;right:12px;z-index:50;display:flex;align-items:center;gap:7px;
+    background:rgba(13,17,23,.85);border:1px solid var(--line);border-radius:99px;padding:6px 12px;
+    font-size:12.5px;color:var(--dim);backdrop-filter:blur(6px)}
+  #dot i{width:9px;height:9px;border-radius:50%;background:#5a6672;display:block}
+  #dot.on i{background:var(--acc);box-shadow:0 0 8px var(--acc)}
+  #dot.conn i{background:var(--amber);animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  .jname{font-family:'Barlow Condensed';font-size:26px;font-weight:600;text-align:center;margin:2px 0 0}
+  .jsub{text-align:center;color:var(--dim);font-size:13.5px;margin-bottom:8px}
+  .count{font-family:'Barlow Condensed';font-weight:700;font-size:clamp(90px,26vw,150px);line-height:1;
+    text-align:center;font-variant-numeric:tabular-nums;margin:4px 0 10px}
+  .tapzone{height:46vh;min-height:230px;border-radius:26px;border:2px solid var(--acc-dark);
+    background:radial-gradient(120% 120% at 50% 0%,rgba(56,224,123,.16),rgba(56,224,123,.05));
+    display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;position:relative;overflow:hidden}
+  .tapzone:active{background:rgba(56,224,123,.25)}
+  .tapzone .plus{font-family:'Barlow Condensed';font-weight:700;font-size:64px;color:var(--acc)}
+  .tapzone .lbl{color:var(--dim);font-size:14px;letter-spacing:.15em}
+  .tapzone.locked{opacity:.35;pointer-events:none}
+  .flash{position:absolute;inset:0;background:rgba(56,224,123,.35);opacity:0;pointer-events:none}
+  .flash.go{animation:fl .18s}
+  @keyframes fl{0%{opacity:1}100%{opacity:0}}
+  .ggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .gtile{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px;text-align:center}
+  .gtile .nm{font-family:'Barlow Condensed';font-size:19px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gtile .ct{font-family:'Barlow Condensed';font-weight:700;font-size:46px;font-variant-numeric:tabular-nums;margin:2px 0 8px}
+  .gtile .plusb{width:100%;padding:16px 0;font-size:26px;border-radius:12px;cursor:pointer;
+    background:rgba(56,224,123,.15);border:1.5px solid var(--acc-dark);color:var(--acc);
+    font-family:'Barlow Condensed';font-weight:700}
+  .gtile .plusb:active{background:rgba(56,224,123,.35)}
+  .gtile .minusb{margin-top:6px;background:none;border:none;color:var(--dim);font-size:15px;cursor:pointer;padding:6px}
+  .brow{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+    border-radius:14px;padding:10px 14px;margin:8px 0;position:relative;overflow:hidden}
+  .brow .bar{position:absolute;left:0;top:0;bottom:0;background:rgba(56,224,123,.10);transition:width .4s}
+  .brow .pos{font-family:'Barlow Condensed';font-weight:700;font-size:26px;width:34px;color:var(--dim);z-index:1}
+  .brow.p1 .pos{color:#ffd700}.brow.p2 .pos{color:#c8d3dd}.brow.p3 .pos{color:#d8925a}
+  .brow .nm{font-family:'Barlow Condensed';font-size:24px;font-weight:600;z-index:1;flex:1;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .brow .rp{font-family:'Barlow Condensed';font-weight:700;font-size:36px;font-variant-numeric:tabular-nums;z-index:1}
+  .brow .rp small{font-size:14px;color:var(--dim);font-weight:500;margin-left:4px}
+  .bhead{display:flex;align-items:baseline;gap:12px;margin-top:6px;flex-wrap:wrap}
+  .bhead h2{margin:0;font-size:30px}
+  .bhead .cd{font-family:'Barlow Condensed';color:var(--acc);font-size:22px;letter-spacing:.2em}
+  .final{display:inline-block;background:var(--amber);color:#3a2600;border-radius:8px;padding:2px 10px;
+    font-family:'Barlow Condensed';font-weight:700;font-size:16px;letter-spacing:.08em;margin-left:6px}
+  .back{background:none;border:none;color:var(--dim);font-size:15px;cursor:pointer;padding:8px 0;display:flex;gap:6px;align-items:center}
+  .athrow{display:flex;gap:8px;margin:8px 0}
+  .heatitem{display:flex;align-items:center;justify-content:space-between;padding:12px 4px;border-bottom:1px solid var(--line);cursor:pointer}
+  .heatitem b{font-family:'Barlow Condensed';font-size:20px}
+  .heatitem span{color:var(--dim);font-size:13px}
+  .pick{display:flex;flex-direction:column;gap:10px}
+  .pick button{text-align:left;display:flex;justify-content:space-between;align-items:center;font-size:22px}
+  details{margin:14px 4px;color:var(--dim);font-size:14px}
+  details summary{cursor:pointer;font-weight:600}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--card2);
+    border:1px solid var(--line);color:var(--txt);border-radius:99px;padding:10px 20px;font-size:15px;
+    z-index:99;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
+  .toast.show{opacity:1}
+  @media(min-width:600px){ .rolegrid{grid-template-columns:repeat(4,1fr)} }
+</style>
+</head>
+<body>
+<div id="dot"><i></i><span>offline</span></div>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+/* ============================================================
+   ContaRep — contatore rep live per gare (judge → scoreboard)
+   Un solo file. Sync in tempo reale via MQTT-over-WebSocket
+   (broker pubblici, nessuna configurazione). Funziona anche
+   offline su un singolo dispositivo.
+   ============================================================ */
+
+/* ---------- storage ---------- */
+const LS = "contarep.v1";
+let db = { heats: {} };
+try { db = JSON.parse(localStorage.getItem(LS)) || { heats: {} }; } catch (e) {}
+if (!db.heats) db.heats = {};
+function save() { try { localStorage.setItem(LS, JSON.stringify(db)); } catch (e) {} }
+
+const rnd = (n, chars) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+const newCode = () => rnd(5, "ABCDEFGHJKMNPQRSTUVWXYZ23456789");
+const newId = () => "a" + rnd(8, "abcdefghijklmnopqrstuvwxyz0123456789");
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const DEVICE = (() => {
+  let d = null;
+  try { d = localStorage.getItem("contarep.dev"); } catch (e) {}
+  if (!d) { d = "d" + rnd(8, "abcdefghijklmnopqrstuvwxyz0123456789"); try { localStorage.setItem("contarep.dev", d); } catch (e) {} }
+  return d;
+})();
+
+function getHeat(code) { return db.heats[code] || null; }
+function ensureHeat(code) {
+  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, athletes: [], counts: {}, metaT: 0 };
+  return db.heats[code];
+}
+
+/* ---------- toast ---------- */
+let toastTm = null;
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTm); toastTm = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+/* ---------- sync (MQTT over WSS, broker pubblici) ---------- */
+const BROKERS = [
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://test.mosquitto.org:8081"
+];
+const TOPIC = code => "contarep/v1/" + code;
+let client = null, connCode = null, brokerIdx = 0, failCount = 0;
+let libState = "no"; // no | loading | ok | fail
+let recvT = {};      // topic -> t più recente ricevuto (per re-publish dopo connect)
+
+function setDot(state, label) {
+  const d = document.getElementById("dot");
+  d.className = state; d.querySelector("span").textContent = label;
+}
+
+function loadLib(cb) {
+  if (window.mqtt) { libState = "ok"; cb(); return; }
+  if (libState === "loading") return;
+  libState = "loading";
+  const srcs = [
+    "https://unpkg.com/mqtt@5/dist/mqtt.min.js",
+    "https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"
+  ];
+  let i = 0;
+  const tryNext = () => {
+    if (i >= srcs.length) { libState = "fail"; setDot("", "offline"); return; }
+    const s = document.createElement("script");
+    s.src = srcs[i++];
+    s.onload = () => { libState = "ok"; cb(); };
+    s.onerror = () => tryNext();
+    document.head.appendChild(s);
+  };
+  tryNext();
+}
+
+function ensureSync(code) {
+  if (connCode === code && client) return;
+  disconnect();
+  connCode = code; brokerIdx = 0; failCount = 0;
+  setDot("conn", "connessione…");
+  if (libState === "fail") libState = "no"; // riprova: magari ora c'è rete
+  loadLib(() => connect(code));
+}
+
+function connect(code) {
+  if (!window.mqtt || connCode !== code) return;
+  const url = BROKERS[brokerIdx % BROKERS.length];
+  let connected = false;
+  try {
+    client = mqtt.connect(url, {
+      clientId: "contarep_" + DEVICE + "_" + rnd(4, "0123456789"),
+      clean: true, connectTimeout: 7000, reconnectPeriod: 4000, keepalive: 30
+    });
+  } catch (e) { rotateBroker(code); return; }
+
+  client.on("connect", () => {
+    connected = true; failCount = 0;
+    setDot("on", "live");
+    client.subscribe(TOPIC(code) + "/#", { qos: 0 });
+    setTimeout(() => republishNewer(code), 2500);
+  });
+  client.on("message", (topic, payload) => onMsg(code, topic, payload));
+  client.on("close", () => {
+    if (connCode !== code) return;
+    setDot("conn", "riconnessione…");
+    if (!connected) { failCount++; if (failCount >= 2) rotateBroker(code); }
+  });
+  client.on("error", () => {});
+}
+
+function rotateBroker(code) {
+  disconnectKeepCode();
+  brokerIdx++; failCount = 0;
+  setDot("conn", "riconnessione…");
+  setTimeout(() => { if (connCode === code) connect(code); }, brokerIdx < BROKERS.length ? 600 : 2500);
+}
+function disconnectKeepCode() {
+  if (client) { try { client.end(true); } catch (e) {} client = null; }
+}
+function disconnect() {
+  disconnectKeepCode();
+  connCode = null; recvT = {};
+  setDot("", "pronto — entra in un heat");
+}
+
+function pub(topic, obj) {
+  if (client && client.connected) {
+    try { client.publish(topic, JSON.stringify(obj), { qos: 0, retain: true }); } catch (e) {}
+  }
+}
+function pubMeta(h) {
+  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, t: h.metaT });
+}
+function pubCount(h, aid) {
+  const c = h.counts[aid] || { r: 0, t: 0 };
+  pub(TOPIC(h.code) + "/c/" + aid, { r: c.r, t: c.t, by: DEVICE });
+}
+function republishNewer(code) {
+  const h = getHeat(code);
+  if (!h || !client || !client.connected) return;
+  if ((h.metaT || 0) > (recvT[TOPIC(code) + "/meta"] || 0)) pubMeta(h);
+  for (const aid in h.counts) {
+    if ((h.counts[aid].t || 0) > (recvT[TOPIC(code) + "/c/" + aid] || 0)) pubCount(h, aid);
+  }
+}
+
+function onMsg(code, topic, payload) {
+  let m; try { m = JSON.parse(payload.toString()); } catch (e) { return; }
+  if (!m || typeof m.t !== "number") return;
+  recvT[topic] = Math.max(recvT[topic] || 0, m.t);
+  const h = ensureHeat(code);
+  const base = TOPIC(code);
+  let changed = false;
+  if (topic === base + "/meta") {
+    if (m.t > (h.metaT || 0)) {
+      h.name = m.name || ""; h.closed = !!m.closed;
+      if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || "") }));
+      h.metaT = m.t; changed = true;
+    }
+  } else if (topic.indexOf(base + "/c/") === 0) {
+    const aid = topic.slice((base + "/c/").length);
+    const cur = h.counts[aid] || { r: 0, t: 0 };
+    if (m.t > cur.t) { h.counts[aid] = { r: Math.max(0, m.r | 0), t: m.t }; changed = true; }
+  }
+  if (changed) { save(); softRender(); }
+}
+
+/* ---------- azioni ---------- */
+let lastT = 0;
+function nowT() { lastT = Math.max(Date.now(), lastT + 1); return lastT; } // timestamp sempre crescente
+function bumpMeta(h) { h.metaT = nowT(); save(); pubMeta(h); }
+
+function addRep(code, aid, delta) {
+  const h = getHeat(code); if (!h || h.closed) return;
+  const cur = h.counts[aid] || { r: 0, t: 0 };
+  const r = Math.max(0, (cur.r | 0) + delta);
+  h.counts[aid] = { r, t: nowT() };
+  save(); pubCount(h, aid);
+  if (navigator.vibrate) { try { navigator.vibrate(delta > 0 ? 25 : [50, 40, 50]); } catch (e) {} }
+  softRender();
+}
+
+/* ---------- wake lock ---------- */
+let wl = null;
+async function keepAwake() {
+  try { if ("wakeLock" in navigator) wl = await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") { keepAwake(); if (connCode) republishNewer(connCode); }
+});
+
+/* ---------- routing ---------- */
+function nav(h) { location.hash = h; }
+window.addEventListener("hashchange", render);
+
+function route() {
+  const p = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (p[0] === "new") return { v: "new" };
+  if (p[0] === "h" && p[1]) {
+    const code = p[1].toUpperCase();
+    return { v: p[2] || "hub", code, aid: p[3] || null };
+  }
+  return { v: "home" };
+}
+
+/* softRender: durante i tap del giudice aggiorna solo il numero (niente flicker) */
+let lastView = "";
+function softRender() {
+  const r = route();
+  const key = r.v + "/" + (r.code || "");
+  if (key !== lastView) { render(); return; }
+  if (r.v === "judge" && r.aid) {
+    const h = getHeat(r.code); if (!h) return render();
+    const el = document.getElementById("bigcount");
+    if (el) el.textContent = (h.counts[r.aid] || { r: 0 }).r;
+    else render();
+  } else if (r.v === "grid" || r.v === "board" || r.v === "hub") {
+    render();
+  }
+}
+
+/* ---------- viste ---------- */
+const app = () => document.getElementById("app");
+
+function header(backTo) {
+  return backTo != null
+    ? `<button class="back" onclick="nav('${backTo}')">‹ indietro</button>`
+    : `<div class="logo"><div class="mark">CR</div><b>CONTA<i>REP</i></b></div>
+       <p class="tag">Conteggio rep live per i tuoi WOD di gara</p>`;
+}
+
+function vHome() {
+  const heats = Object.values(db.heats).sort((a, b) => b.createdAt - a.createdAt);
+  app().innerHTML = `
+    ${header(null)}
+    <div class="card">
+      <h3>Nuovo heat</h3>
+      <p class="muted">Crea una batteria, inserisci gli atleti e condividi il codice con i giudici.</p>
+      <button class="btn" style="margin-top:10px" onclick="nav('new')">+ Crea heat</button>
+    </div>
+    <div class="card">
+      <h3>Entra in un heat</h3>
+      <div class="row">
+        <input type="text" id="joincode" class="code grow" maxlength="5" placeholder="CODICE" autocomplete="off">
+        <button class="btn small" style="width:auto" onclick="joinCode()">Entra</button>
+      </div>
+    </div>
+    ${heats.length ? `<div class="card"><h3>I tuoi heat</h3>
+      ${heats.map(h => `
+        <div class="heatitem" onclick="nav('h/${h.code}')">
+          <div><b>${esc(h.name || "Heat " + h.code)}</b><br>
+          <span>${h.athletes.length} atleti · codice ${h.code} ${h.closed ? "· CHIUSO" : ""}</span></div>
+          <span>›</span>
+        </div>`).join("")}
+    </div>` : ""}
+    <details>
+      <summary>Come funziona</summary>
+      <p>1 — Chi organizza crea l'heat con i nomi degli atleti e comunica il <b>codice</b>.<br>
+      2 — Ogni giudice apre questa pagina sul suo telefono, inserisce il codice e sceglie il suo atleta: ogni tocco = 1 rep.<br>
+      3 — Su un PC/maxischermo si apre la vista <b>Scoreboard</b>: la classifica si aggiorna in tempo reale.<br>
+      4 — A fine WOD si chiude l'heat e si esporta il CSV.<br><br>
+      Serve internet per la sincronizzazione tra dispositivi. Senza connessione l'app funziona comunque su un singolo dispositivo (vista Griglia).</p>
+    </details>`;
+  const jc = document.getElementById("joincode");
+  jc.addEventListener("keydown", e => { if (e.key === "Enter") joinCode(); });
+}
+window.joinCode = () => {
+  const v = (document.getElementById("joincode").value || "").trim().toUpperCase();
+  if (v.length < 4) { toast("Inserisci il codice heat"); return; }
+  ensureHeat(v); save(); nav("h/" + v);
+};
+
+function vNew() {
+  app().innerHTML = `
+    ${header("")}
+    <h2>Nuovo heat</h2>
+    <div class="card">
+      <input type="text" id="hname" placeholder="Nome heat (es. WOD 1 — Heat 2)" maxlength="40">
+      <h3 style="margin-top:16px">Atleti</h3>
+      <div id="athletes"></div>
+      <button class="btn sec small" onclick="addAthRow()">+ aggiungi atleta</button>
+      <button class="btn" style="margin-top:14px" onclick="createHeat()">Crea heat</button>
+    </div>`;
+  for (let i = 0; i < 5; i++) addAthRow();
+}
+window.addAthRow = (val) => {
+  const d = document.createElement("div");
+  d.className = "athrow";
+  d.innerHTML = `<input type="text" class="grow athname" placeholder="Nome atleta" maxlength="30" value="${esc(typeof val === "string" ? val : "")}">
+    <button class="btn sec small" onclick="this.parentNode.remove()">✕</button>`;
+  document.getElementById("athletes").appendChild(d);
+};
+window.createHeat = () => {
+  const names = [...document.querySelectorAll(".athname")].map(i => i.value.trim()).filter(Boolean);
+  if (names.length < 1) { toast("Inserisci almeno un atleta"); return; }
+  let code = newCode(); while (db.heats[code]) code = newCode();
+  const h = ensureHeat(code);
+  h.name = (document.getElementById("hname").value || "").trim();
+  h.athletes = names.map(n => ({ id: newId(), name: n }));
+  h.counts = {}; h.metaT = Date.now();
+  save();
+  ensureSync(code);
+  setTimeout(() => pubMeta(h), 1200);
+  setTimeout(() => pubMeta(h), 5000);
+  nav("h/" + code);
+};
+
+function vHub(code) {
+  const h = ensureHeat(code); save();
+  ensureSync(code);
+  const waiting = h.athletes.length === 0;
+  app().innerHTML = `
+    ${header("")}
+    <div class="card" style="text-align:center">
+      <h3 style="font-size:24px">${esc(h.name || "Heat")} ${h.closed ? '<span class="final">CHIUSO</span>' : ""}</h3>
+      <div class="codebox">${esc(code)}</div>
+      <p class="muted">Codice heat — comunicalo ai giudici</p>
+      <button class="btn sec small" onclick="shareHeat('${code}')">Copia link / condividi</button>
+    </div>
+    ${waiting ? `<div class="card"><p class="muted">In attesa dei dati dell'heat… Se l'heat esiste, arriveranno appena la connessione è attiva (pallino in alto a destra = live). Altrimenti verifica il codice.</p></div>` : ""}
+    <div class="rolegrid">
+      <div class="role" onclick="nav('h/${code}/judge')"><div class="ic">👨‍⚖️</div><b>Giudice</b><span>conta le rep di un atleta</span></div>
+      <div class="role" onclick="nav('h/${code}/board')"><div class="ic">🏆</div><b>Scoreboard</b><span>classifica live per lo schermo</span></div>
+      <div class="role" onclick="nav('h/${code}/grid')"><div class="ic">🔢</div><b>Griglia</b><span>tutti gli atleti su un dispositivo</span></div>
+      <div class="role" onclick="nav('h/${code}/setup')"><div class="ic">✏️</div><b>Modifica</b><span>nome, atleti, chiusura heat</span></div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <button class="btn ${h.closed ? "sec" : "warn"} small grow" onclick="toggleClose('${code}')">${h.closed ? "Riapri heat" : "Chiudi heat (fine WOD)"}</button>
+        <button class="btn sec small" onclick="delHeat('${code}')">Elimina da qui</button>
+      </div>
+    </div>`;
+}
+window.shareHeat = async (code) => {
+  const url = location.protocol.indexOf("http") === 0 ? location.href.split("#")[0] + "#h/" + code : "";
+  const txt = url ? "ContaRep — heat " + code + ": " + url : "ContaRep — codice heat: " + code;
+  if (navigator.share) { try { await navigator.share({ text: txt }); return; } catch (e) {} }
+  try { await navigator.clipboard.writeText(txt); toast("Copiato!"); } catch (e) { toast("Codice: " + code); }
+};
+window.toggleClose = (code) => {
+  const h = getHeat(code); if (!h) return;
+  h.closed = !h.closed; bumpMeta(h); render();
+  toast(h.closed ? "Heat chiuso" : "Heat riaperto");
+};
+window.delHeat = (code) => {
+  if (!confirm("Rimuovere questo heat dal dispositivo? (i dati sugli altri dispositivi restano)")) return;
+  delete db.heats[code]; save(); disconnect(); nav("");
+};
+
+function vJudge(code, aid) {
+  const h = ensureHeat(code); save();
+  ensureSync(code); keepAwake();
+  if (!aid) {
+    app().innerHTML = `
+      ${header("h/" + code)}
+      <h2>Chi stai giudicando?</h2>
+      <div class="pick">
+        ${h.athletes.map(a => `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
+          <span>${esc(a.name)}</span><span style="color:var(--dim)">${(h.counts[a.id] || { r: 0 }).r} rep</span></button>`).join("") ||
+        '<p class="muted">Nessun atleta ancora. In attesa dei dati dell\'heat…</p>'}
+      </div>`;
+    return;
+  }
+  const a = h.athletes.find(x => x.id === aid);
+  if (!a) { nav("h/" + code + "/judge"); return; }
+  const r = (h.counts[aid] || { r: 0 }).r;
+  app().innerHTML = `
+    ${header("h/" + code + "/judge")}
+    <p class="jname">${esc(a.name)}</p>
+    <p class="jsub">${esc(h.name || "heat " + code)}${h.closed ? " — HEAT CHIUSO" : ""}</p>
+    <div class="count" id="bigcount">${r}</div>
+    <div class="tapzone ${h.closed ? "locked" : ""}" id="tapzone">
+      <div class="flash" id="flash"></div>
+      <div class="plus">+1</div>
+      <div class="lbl">TOCCA PER CONTARE</div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn sec grow" ${h.closed ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
+      <button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>
+    </div>`;
+  const tz = document.getElementById("tapzone");
+  tz.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    addRep(code, aid, 1);
+    const f = document.getElementById("flash");
+    f.classList.remove("go"); void f.offsetWidth; f.classList.add("go");
+  });
+}
+
+function vGrid(code) {
+  const h = ensureHeat(code); save();
+  ensureSync(code); keepAwake();
+  app().innerHTML = `
+    ${header("h/" + code)}
+    <div class="bhead"><h2>${esc(h.name || "Heat " + code)}</h2>
+      <span class="cd">${esc(code)}</span>${h.closed ? '<span class="final">CHIUSO</span>' : ""}</div>
+    <p class="muted" style="margin:4px 0 12px">Griglia giudici — un pulsante per atleta</p>
+    <div class="ggrid">
+      ${h.athletes.map(a => {
+        const r = (h.counts[a.id] || { r: 0 }).r;
+        return `<div class="gtile">
+          <div class="nm">${esc(a.name)}</div>
+          <div class="ct">${r}</div>
+          <button class="plusb" ${h.closed ? "disabled" : ""} data-aid="${a.id}">+1</button>
+          <button class="minusb" ${h.closed ? "disabled" : ""} onclick="addRep('${code}','${a.id}',-1)">−1 correzione</button>
+        </div>`;
+      }).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
+    </div>`;
+  document.querySelectorAll(".plusb").forEach(b => {
+    b.addEventListener("pointerdown", e => { e.preventDefault(); addRep(code, b.dataset.aid, 1); });
+  });
+}
+
+function vBoard(code) {
+  const h = ensureHeat(code); save();
+  ensureSync(code); keepAwake();
+  const rows = h.athletes
+    .map(a => ({ id: a.id, name: a.name, r: (h.counts[a.id] || { r: 0 }).r }))
+    .sort((x, y) => y.r - x.r);
+  const max = Math.max(1, ...rows.map(x => x.r));
+  app().innerHTML = `
+    ${header("h/" + code)}
+    <div class="bhead">
+      <h2>${esc(h.name || "Heat " + code)}</h2>
+      <span class="cd">${esc(code)}</span>
+      ${h.closed ? '<span class="final">FINALE</span>' : ""}
+    </div>
+    <p class="muted" style="margin:2px 0 8px">Classifica live</p>
+    ${rows.map((a, i) => `
+      <div class="brow p${i + 1}">
+        <div class="bar" style="width:${(a.r / max) * 100}%"></div>
+        <div class="pos">${i + 1}</div>
+        <div class="nm">${esc(a.name)}</div>
+        <div class="rp">${a.r}<small>rep</small></div>
+      </div>`).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
+    <div class="row" style="margin-top:16px">
+      <button class="btn sec small grow" onclick="exportCsv('${code}')">⬇ Esporta CSV</button>
+      <button class="btn sec small grow" onclick="copyBoard('${code}')">Copia classifica</button>
+      <button class="btn sec small" onclick="goFull()">⛶</button>
+    </div>`;
+}
+window.goFull = () => {
+  const el = document.documentElement;
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (el.requestFullscreen) el.requestFullscreen();
+};
+function boardRows(code) {
+  const h = getHeat(code); if (!h) return [];
+  return h.athletes.map(a => ({ name: a.name, r: (h.counts[a.id] || { r: 0 }).r })).sort((x, y) => y.r - x.r);
+}
+window.exportCsv = (code) => {
+  const h = getHeat(code);
+  const rows = boardRows(code);
+  const csv = "Posizione;Atleta;Reps\r\n" + rows.map((a, i) => (i + 1) + ';"' + a.name.replace(/"/g, '""') + '";' + a.r).join("\r\n") + "\r\n";
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const aEl = document.createElement("a");
+  aEl.href = URL.createObjectURL(blob);
+  aEl.download = "contarep_" + (h && h.name ? h.name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") + "_" : "") + code + ".csv";
+  document.body.appendChild(aEl); aEl.click(); aEl.remove();
+  toast("CSV esportato");
+};
+window.copyBoard = async (code) => {
+  const h = getHeat(code);
+  const rows = boardRows(code);
+  const txt = (h && h.name ? h.name + "\n" : "") + rows.map((a, i) => (i + 1) + ". " + a.name + " — " + a.r + " rep").join("\n");
+  try { await navigator.clipboard.writeText(txt); toast("Classifica copiata"); } catch (e) { toast("Copia non riuscita"); }
+};
+
+function vSetup(code) {
+  const h = ensureHeat(code); save();
+  ensureSync(code);
+  app().innerHTML = `
+    ${header("h/" + code)}
+    <h2>Modifica heat</h2>
+    <div class="card">
+      <input type="text" id="hname" placeholder="Nome heat" maxlength="40" value="${esc(h.name)}">
+      <h3 style="margin-top:16px">Atleti</h3>
+      <div id="athletes">
+        ${h.athletes.map(a => `<div class="athrow" data-aid="${a.id}">
+          <input type="text" class="grow athname" maxlength="30" value="${esc(a.name)}">
+          <button class="btn sec small" onclick="this.parentNode.remove()">✕</button>
+        </div>`).join("")}
+      </div>
+      <button class="btn sec small" onclick="addAthRow()">+ aggiungi atleta</button>
+      <button class="btn" style="margin-top:14px" onclick="saveSetup('${code}')">Salva modifiche</button>
+      <p class="muted" style="margin-top:10px">Rimuovere un atleta ne elimina anche il conteggio. Le rep già contate degli altri restano.</p>
+    </div>`;
+}
+window.saveSetup = (code) => {
+  const h = getHeat(code); if (!h) return;
+  h.name = (document.getElementById("hname").value || "").trim();
+  const rows = [...document.querySelectorAll("#athletes .athrow")];
+  const ath = [];
+  rows.forEach(r => {
+    const nm = r.querySelector(".athname").value.trim();
+    if (!nm) return;
+    const aid = r.dataset.aid || newId();
+    ath.push({ id: aid, name: nm });
+  });
+  if (!ath.length) { toast("Serve almeno un atleta"); return; }
+  h.athletes = ath;
+  const keep = {};
+  ath.forEach(a => keep[a.id] = 1);
+  for (const k in h.counts) if (!keep[k]) delete h.counts[k];
+  bumpMeta(h);
+  toast("Salvato");
+  nav("h/" + code);
+};
+
+/* ---------- render ---------- */
+function render() {
+  const r = route();
+  lastView = r.v + "/" + (r.code || "");
+  try { window.scrollTo(0, 0); } catch (e) {}
+  if (r.v === "home") { disconnect(); vHome(); }
+  else if (r.v === "new") { vNew(); }
+  else if (r.v === "hub") vHub(r.code);
+  else if (r.v === "judge") vJudge(r.code, r.aid);
+  else if (r.v === "grid") vGrid(r.code);
+  else if (r.v === "board") vBoard(r.code);
+  else if (r.v === "setup") vSetup(r.code);
+  else vHome();
+}
+window.nav = nav;
+window.addRep = addRep;
+render();
+loadLib(() => { if (connCode) connect(connCode); }); // precarica la libreria di sync
+</script>
+</body>
+</html>
