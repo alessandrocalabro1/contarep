@@ -135,6 +135,21 @@
     padding:10px 12px;font-size:15px;font-family:'Barlow';outline:none}
   select:focus{border-color:var(--acc)}
   .waitpulse{font-size:38px;animation:pulse 1.6s infinite}
+  textarea{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:12px;color:var(--txt);
+    font-size:16px;padding:12px 14px;outline:none;font-family:'Barlow';min-height:120px;resize:vertical;
+    user-select:text;-webkit-user-select:text}
+  textarea:focus{border-color:var(--acc)}
+  .wodbox{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;margin:0 0 8px;text-align:left}
+  .wodbox .wodhead{color:var(--dim);font-size:12.5px;letter-spacing:.1em;margin-bottom:3px}
+  .wodcur{font-family:'Barlow Condensed';font-size:23px;font-weight:600}
+  .wodcur span{color:var(--amber);font-size:16px;margin-left:8px;font-family:'Barlow';font-weight:500}
+  .wodcur.done{color:var(--acc)}
+  .wodnext{color:var(--dim);font-size:14px;margin-top:1px}
+  .wodbox ol{margin:6px 0 2px;padding-left:20px;color:var(--dim);font-size:14.5px}
+  .wodbox li{margin:2px 0}
+  .wodbox li.done{text-decoration:line-through;opacity:.5}
+  .wodbox li.cur{color:var(--acc);font-weight:600}
+  .wodbox details{margin:5px 0 0;font-size:13px}
   .btn.fin{background:var(--amber);color:#3a2600;margin-top:12px}
   .jtimer{font-family:'Barlow Condensed';font-weight:700;font-size:34px;text-align:center;margin:2px 0 0;
     font-variant-numeric:tabular-nums;color:var(--acc)}
@@ -169,6 +184,13 @@ const rnd = (n, chars) => Array.from({ length: n }, () => chars[Math.floor(Math.
 const newCode = () => rnd(5, "ABCDEFGHJKMNPQRSTUVWXYZ23456789");
 const newId = () => "a" + rnd(8, "abcdefghijklmnopqrstuvwxyz0123456789");
 function fmtMs(ms) { if (ms == null) return ""; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function modeLbl(w) { return w === "amrap" ? "AMRAP" : (w === "emom" ? "EMOM" : "FOR TIME"); }
+function parseSteps(txt) {
+  return String(txt || "").split("\n").map(s => s.trim()).filter(Boolean).slice(0, 40).map(line => {
+    const m = line.match(/^(\d+)\s*[x×]?\s*(.+)$/i);
+    return m ? { n: +m[1], label: m[2] } : { n: null, label: line };
+  });
+}
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const DEVICE = (() => {
   let d = null;
@@ -181,7 +203,7 @@ function getJname() { try { return localStorage.getItem("contarep.jname") || "";
 function setJname(v) { try { localStorage.setItem("contarep.jname", v); } catch (e) {} }
 function getHeat(code) { return db.heats[code] || null; }
 function ensureHeat(code) {
-  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, wod: "fortime", athletes: [], counts: {}, judges: {}, assign: {}, metaT: 0 };
+  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, wod: "fortime", steps: [], wodTxt: "", athletes: [], counts: {}, judges: {}, assign: {}, metaT: 0 };
   return db.heats[code];
 }
 
@@ -285,7 +307,7 @@ function pub(topic, obj) {
   }
 }
 function pubMeta(h) {
-  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, wod: h.wod || "fortime", assign: h.assign || {}, t: h.metaT });
+  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, wod: h.wod || "fortime", steps: h.steps || [], wodTxt: h.wodTxt || "", assign: h.assign || {}, t: h.metaT });
 }
 function pubCount(h, aid) {
   const c = h.counts[aid] || { r: 0, t: 0 };
@@ -318,7 +340,9 @@ function onMsg(code, topic, payload) {
     if (m.t > (h.metaT || 0)) {
       h.name = m.name || ""; h.closed = !!m.closed;
       h.startAt = (typeof m.startAt === "number") ? m.startAt : null;
-      h.wod = (m.wod === "amrap") ? "amrap" : "fortime";
+      h.wod = (m.wod === "amrap" || m.wod === "emom") ? m.wod : "fortime";
+      h.steps = Array.isArray(m.steps) ? m.steps.filter(s => s && s.label).slice(0, 40).map(s => ({ n: (typeof s.n === "number") ? s.n : null, label: String(s.label) })) : [];
+      h.wodTxt = (typeof m.wodTxt === "string") ? m.wodTxt : "";
       h.assign = (m.assign && typeof m.assign === "object") ? m.assign : {};
       if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || "") }));
       h.metaT = m.t; changed = true;
@@ -422,11 +446,59 @@ function softRender() {
     if (asg && asg !== r.aid) return render(); // riassegnato: segui l'head judge
     const c = h.counts[r.aid] || { r: 0 };
     const el = document.getElementById("bigcount");
-    if (el && c.fin == null && !h.closed) el.textContent = c.r | 0;
+    if (el && c.fin == null && !h.closed) {
+      el.textContent = c.r | 0;
+      const wb = document.getElementById("wodbox");
+      if (wb) {
+        const d0 = wb.querySelector("details");
+        const wasOpen = !!(d0 && d0.open);
+        wb.innerHTML = stepsWidget(h, c.r | 0);
+        const d1 = wb.querySelector("details");
+        if (d1 && wasOpen) d1.open = true;
+      }
+    }
     else render();
   } else {
     render();
   }
+}
+
+/* ---------- scaletta WOD ---------- */
+function stepsWidget(h, count) {
+  const st = h.steps || [];
+  if (!st.length) return "";
+  const li = (s, i, curIdx, doneUpTo) =>
+    `<li class="${i < doneUpTo ? "done" : ""}${i === curIdx ? " cur" : ""}" data-lb="${esc((s.n ? s.n + " " : "") + s.label)}">${s.n ? s.n + " " : ""}${esc(s.label)}</li>`;
+  const olFull = (curIdx, doneUpTo) => "<ol>" + st.map((s, i) => li(s, i, curIdx, doneUpTo)).join("") + "</ol>";
+  if (h.wod === "emom") {
+    if (!h.startAt) return `<div class="wodbox"><div class="wodhead">📋 EMOM — la scaletta gira con lo START</div>${olFull(-1, 0)}</div>`;
+    const n = st.length;
+    const elMin = Math.floor((Date.now() - h.startAt) / 60000);
+    const idx = elMin % n;
+    return `<div class="wodbox" data-emom="${h.startAt}" data-n="${n}">
+      <div class="wodhead">📋 EMOM — minuto ${elMin + 1}</div>
+      <div class="wodcur">▶ ${st[idx].n ? st[idx].n + " " : ""}${esc(st[idx].label)}</div>
+      <details><summary>tutta la scaletta</summary>${olFull(idx, 0)}</details></div>`;
+  }
+  const nums = st.every(s => s.n != null);
+  if (!nums) return `<div class="wodbox"><div class="wodhead">📋 Scaletta WOD</div>${olFull(-1, 0)}</div>`;
+  const total = st.reduce((a, s) => a + s.n, 0);
+  let round = 1, c = count | 0;
+  if (h.wod === "amrap" && total > 0) { round = Math.floor(c / total) + 1; c = c % total; }
+  if (h.wod !== "amrap" && c >= total) {
+    return `<div class="wodbox"><div class="wodhead">📋 step ${st.length}/${st.length}</div>
+      <div class="wodcur done">✅ Scaletta completa — 🏁 ferma il tempo!</div>
+      <details><summary>tutta la scaletta</summary>${olFull(-1, st.length)}</details></div>`;
+  }
+  let acc = 0, idx = st.length - 1, rem = 0;
+  for (let i = 0; i < st.length; i++) { if (c < acc + st[i].n) { idx = i; rem = acc + st[i].n - c; break; } acc += st[i].n; }
+  const next = st[idx + 1];
+  return `<div class="wodbox">
+    <div class="wodhead">📋 ${h.wod === "amrap" ? "ROUND " + round + " · " : ""}step ${idx + 1}/${st.length}</div>
+    <div class="wodcur">▶ ${st[idx].n} ${esc(st[idx].label)} <span>mancano ${rem}</span></div>
+    <div class="wodnext">${next ? "poi: " + next.n + " " + esc(next.label) : (h.wod === "amrap" ? "poi: si riparte (round " + (round + 1) + ")" : "ultimo step")}</div>
+    <details><summary>tutta la scaletta</summary>${olFull(idx, idx)}</details>
+  </div>`;
 }
 
 /* ---------- viste ---------- */
@@ -465,7 +537,7 @@ function vHome() {
       ${heats.map(h => `
         <div class="heatitem" onclick="nav('h/${h.code}${h.own ? "" : "/judge"}')">
           <div><b>${esc(h.name || "Heat " + h.code)}</b> ${h.own ? '<span class="tagchip">HEAD JUDGE</span>' : ""}<br>
-          <span>${h.athletes.length} atleti · ${h.wod === "amrap" ? "AMRAP" : "FOR TIME"} · codice ${h.code} ${h.closed ? "· CHIUSO" : ""}</span></div>
+          <span>${h.athletes.length} atleti · ${modeLbl(h.wod)} · codice ${h.code} ${h.closed ? "· CHIUSO" : ""}</span></div>
           <span>›</span>
         </div>`).join("")}
     </div>` : ""}
@@ -493,8 +565,17 @@ function vNew() {
       <h3 style="margin-top:16px">Tipo di WOD</h3>
       <div class="seg" id="wodseg">
         <button type="button" data-w="fortime" class="on" onclick="segPick(this)">⏱ FOR TIME<span>i giudici fermano il tempo</span></button>
-        <button type="button" data-w="amrap" onclick="segPick(this)">🔁 AMRAP<span>si contano solo le rep</span></button>
+        <button type="button" data-w="amrap" onclick="segPick(this)">🔁 AMRAP<span>rep in tempo fisso</span></button>
+        <button type="button" data-w="emom" onclick="segPick(this)">⏲ EMOM<span>un esercizio al minuto</span></button>
       </div>
+      <h3 style="margin-top:16px">Scaletta WOD <span class="muted" style="font-weight:400;font-size:13px">(una riga per movimento)</span></h3>
+      <textarea id="wodtxt" maxlength="800" placeholder="21 Thruster
+21 Pull-up
+15 Thruster
+15 Pull-up
+9 Thruster
+9 Pull-up"></textarea>
+      <p class="muted" style="margin-top:6px">Il numero davanti = rep di quello step: il giudice vedrà avanzare la scaletta da solo mentre conta.</p>
       <h3 style="margin-top:16px">Atleti</h3>
       <div id="athletes"></div>
       <button class="btn sec small" onclick="addAthRow()">+ aggiungi atleta</button>
@@ -521,7 +602,9 @@ window.createHeat = () => {
   h.name = (document.getElementById("hname").value || "").trim();
   h.athletes = names.map(n => ({ id: newId(), name: n }));
   const seg = document.querySelector("#wodseg .on");
-  h.wod = seg && seg.dataset.w === "amrap" ? "amrap" : "fortime";
+  h.wod = seg && (seg.dataset.w === "amrap" || seg.dataset.w === "emom") ? seg.dataset.w : "fortime";
+  h.wodTxt = (document.getElementById("wodtxt").value || "").trim();
+  h.steps = parseSteps(h.wodTxt);
   h.own = true;
   h.counts = {}; h.metaT = Date.now();
   save();
@@ -539,7 +622,7 @@ function vHub(code) {
     ${header("")}
     <div class="card" style="text-align:center">
       <p class="muted" style="margin:0 0 2px;letter-spacing:.12em">🎖️ PANNELLO HEAD JUDGE</p>
-      <h3 style="font-size:24px">${esc(h.name || "Heat")} <span class="tagchip">${h.wod === "amrap" ? "AMRAP" : "FOR TIME"}</span> ${h.closed ? '<span class="final">CHIUSO</span>' : ""}</h3>
+      <h3 style="font-size:24px">${esc(h.name || "Heat")} <span class="tagchip">${modeLbl(h.wod)}</span> ${h.closed ? '<span class="final">CHIUSO</span>' : ""}</h3>
       <div class="codebox">${esc(code)}</div>
       <p class="muted">Codice heat — comunicalo ai giudici</p>
       <button class="btn sec small" onclick="shareHeat('${code}')">Copia link / condividi</button>
@@ -553,6 +636,8 @@ function vHub(code) {
         : (!h.closed ? `<button class="btn" onclick="startTimer('${code}')">▶ START WOD — fai partire il timer</button>
            <p class="muted" style="margin-top:8px">Parte per tutti i dispositivi: serve per fermare il tempo degli atleti che finiscono.</p>` : "")}
     </div>
+    ${(h.steps || []).length ? `<div class="card"><details><summary style="font-family:'Barlow Condensed';font-size:19px;font-weight:600;color:var(--txt)">📋 Scaletta WOD (${h.steps.length} step)</summary>
+      <ol style="margin:10px 0 2px;padding-left:22px;color:var(--dim)">${h.steps.map(s => `<li>${s.n ? s.n + " " : ""}${esc(s.label)}</li>`).join("")}</ol></details></div>` : ""}
     <div class="card">
       <h3>👨‍⚖️ Giudici collegati</h3>
       ${Object.keys(h.judges || {}).length ? Object.entries(h.judges).map(([dev, j]) => `
@@ -603,7 +688,7 @@ window.delHeat = (code) => {
 function vJudge(code, aid) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
-  const ft = h.wod !== "amrap";
+  const ft = h.wod === "fortime";
   const jn = getJname();
   if (!jn) {
     app().innerHTML = `
@@ -659,8 +744,9 @@ function vJudge(code, aid) {
   app().innerHTML = `
     ${mine ? "" : header("h/" + code + "/judge")}
     <p class="jname">${esc(a.name)}</p>
-    <p class="jsub">${esc(h.name || "heat " + code)} · ${ft ? "FOR TIME" : "AMRAP"}${mine ? " · 👨‍⚖️ " + esc(jn) : ""}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
+    <p class="jsub">${esc(h.name || "heat " + code)} · ${modeLbl(h.wod)}${mine ? " · 👨‍⚖️ " + esc(jn) : ""}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
     ${timerHtml}
+    <div id="wodbox">${stepsWidget(h, c.r | 0)}</div>
     <div class="count" id="bigcount">${c.r | 0}</div>
     <div class="tapzone ${locked ? "locked" : ""}" id="tapzone">
       <div class="flash" id="flash"></div>
@@ -672,7 +758,9 @@ function vJudge(code, aid) {
     <div class="row" style="margin-top:12px">
       <button class="btn sec grow" ${locked ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
       ${mine ? `<span class="tagchip" style="padding:8px 12px">ASSEGNATO A TE</span>` : `<button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>`}
-    </div>`;
+    </div>
+    ${(fin || h.closed) ? `<button class="btn" style="margin-top:14px" onclick="nav('')">✅ FINE — il tuo lavoro è fatto, torna alla home</button>` : ""}
+    <p class="muted center" style="margin-top:16px"><button class="linkbtn" onclick="exitJudge()">esci e torna alla home</button></p>`;
   const tz = document.getElementById("tapzone");
   tz.addEventListener("pointerdown", e => {
     e.preventDefault();
@@ -687,6 +775,9 @@ window.saveJname = (code) => {
   setJname(v); render(true);
 };
 window.changeJname = () => { setJname(""); render(true); };
+window.exitJudge = () => {
+  if (confirm("Uscire e tornare alla home? I conteggi restano salvati e sincronizzati.")) nav("");
+};
 
 function vGrid(code) {
   const h = ensureHeat(code); save();
@@ -708,7 +799,7 @@ function vGrid(code) {
           <div class="nm">${esc(a.name)}</div>
           <div class="ct">${fin ? '<span class="ftime">🏁 ' + fmtMs(c.fin) + "</span>" : c.r | 0}</div>
           <button class="plusb" ${lk ? "disabled" : ""} data-aid="${a.id}">+1</button>
-          ${h.wod !== "amrap" && h.startAt && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
+          ${h.wod === "fortime" && h.startAt && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
           ${fin && !h.closed ? `<button class="minusb" onclick="unfinishAth('${code}','${a.id}')">annulla arrivo</button>` : ""}
           ${!lk ? `<button class="minusb" onclick="addRep('${code}','${a.id}',-1)">−1 correzione</button>` : ""}
         </div>`;
@@ -801,9 +892,12 @@ function vSetup(code) {
       <input type="text" id="hname" placeholder="Nome heat" maxlength="40" value="${esc(h.name)}">
       <h3 style="margin-top:16px">Tipo di WOD</h3>
       <div class="seg" id="wodseg">
-        <button type="button" data-w="fortime" class="${h.wod !== "amrap" ? "on" : ""}" onclick="segPick(this)">⏱ FOR TIME<span>i giudici fermano il tempo</span></button>
-        <button type="button" data-w="amrap" class="${h.wod === "amrap" ? "on" : ""}" onclick="segPick(this)">🔁 AMRAP<span>si contano solo le rep</span></button>
+        <button type="button" data-w="fortime" class="${h.wod !== "amrap" && h.wod !== "emom" ? "on" : ""}" onclick="segPick(this)">⏱ FOR TIME<span>i giudici fermano il tempo</span></button>
+        <button type="button" data-w="amrap" class="${h.wod === "amrap" ? "on" : ""}" onclick="segPick(this)">🔁 AMRAP<span>rep in tempo fisso</span></button>
+        <button type="button" data-w="emom" class="${h.wod === "emom" ? "on" : ""}" onclick="segPick(this)">⏲ EMOM<span>un esercizio al minuto</span></button>
       </div>
+      <h3 style="margin-top:16px">Scaletta WOD <span class="muted" style="font-weight:400;font-size:13px">(una riga per movimento)</span></h3>
+      <textarea id="wodtxt" maxlength="800">${esc(h.wodTxt || "")}</textarea>
       <h3 style="margin-top:16px">Atleti</h3>
       <div id="athletes">
         ${h.athletes.map(a => `<div class="athrow" data-aid="${a.id}">
@@ -830,7 +924,9 @@ window.saveSetup = (code) => {
   if (!ath.length) { toast("Serve almeno un atleta"); return; }
   h.athletes = ath;
   const seg = document.querySelector("#wodseg .on");
-  if (seg) h.wod = seg.dataset.w === "amrap" ? "amrap" : "fortime";
+  if (seg) h.wod = (seg.dataset.w === "amrap" || seg.dataset.w === "emom") ? seg.dataset.w : "fortime";
+  h.wodTxt = (document.getElementById("wodtxt").value || "").trim();
+  h.steps = parseSteps(h.wodTxt);
   const keep = {};
   ath.forEach(a => keep[a.id] = 1);
   for (const k in h.counts) if (!keep[k]) delete h.counts[k];
@@ -871,6 +967,18 @@ setInterval(() => {
   document.querySelectorAll("[data-tick]").forEach(el => {
     const st = +el.dataset.tick;
     if (st) el.textContent = fmtMs(Date.now() - st);
+  });
+  document.querySelectorAll("[data-emom]").forEach(box => {
+    const start = +box.dataset.emom, n = +box.dataset.n || 1;
+    if (!start) return;
+    const elMin = Math.floor((Date.now() - start) / 60000);
+    const idx = elMin % n;
+    const head = box.querySelector(".wodhead");
+    if (head) head.textContent = "📋 EMOM — minuto " + (elMin + 1);
+    const lis = box.querySelectorAll("li");
+    lis.forEach((li, i) => li.classList.toggle("cur", i === idx));
+    const cur = box.querySelector(".wodcur");
+    if (cur && lis[idx]) cur.textContent = "▶ " + (lis[idx].dataset.lb || "");
   });
 }, 250);
 loadLib(() => { if (connCode) connect(connCode); }); // precarica la libreria di sync
