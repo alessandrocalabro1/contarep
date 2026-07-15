@@ -135,6 +135,15 @@
     padding:10px 12px;font-size:15px;font-family:'Barlow';outline:none}
   select:focus{border-color:var(--acc)}
   .waitpulse{font-size:38px;animation:pulse 1.6s infinite}
+  .catc{display:inline-block;border-radius:6px;padding:1px 7px;font-family:'Barlow Condensed';font-weight:700;
+    font-size:12.5px;letter-spacing:.08em;vertical-align:middle;margin-left:7px}
+  .catc.elite{background:rgba(255,176,46,.15);color:var(--amber);border:1px solid rgba(255,176,46,.5)}
+  .catc.rx{background:rgba(56,224,123,.12);color:var(--acc);border:1px solid var(--acc-dark)}
+  .catc.scaled{background:rgba(74,168,255,.12);color:var(--blue);border:1px solid rgba(74,168,255,.5)}
+  .cathead{font-family:'Barlow Condensed';font-weight:700;font-size:21px;letter-spacing:.1em;
+    margin:18px 0 2px;color:var(--dim)}
+  .cathead:first-of-type{margin-top:10px}
+  .athrow select{width:96px;flex-shrink:0}
   textarea{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:12px;color:var(--txt);
     font-size:16px;padding:12px 14px;outline:none;font-family:'Barlow';min-height:120px;resize:vertical;
     user-select:text;-webkit-user-select:text}
@@ -184,6 +193,9 @@ const rnd = (n, chars) => Array.from({ length: n }, () => chars[Math.floor(Math.
 const newCode = () => rnd(5, "ABCDEFGHJKMNPQRSTUVWXYZ23456789");
 const newId = () => "a" + rnd(8, "abcdefghijklmnopqrstuvwxyz0123456789");
 function fmtMs(ms) { if (ms == null) return ""; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+const CATS = [["elite", "ELITE"], ["rx", "RX"], ["scaled", "SCALED"]];
+function catOk(c) { return (c === "elite" || c === "rx" || c === "scaled") ? c : ""; }
+function catChip(c) { return c ? '<span class="catc ' + c + '">' + c.toUpperCase() + "</span>" : ""; }
 function modeLbl(w) { return w === "amrap" ? "AMRAP" : (w === "emom" ? "EMOM" : "FOR TIME"); }
 function parseSteps(txt) {
   return String(txt || "").split("\n").map(s => s.trim()).filter(Boolean).slice(0, 40).map(line => {
@@ -374,7 +386,7 @@ function onMsg(code, topic, payload) {
       h.steps = Array.isArray(m.steps) ? m.steps.filter(s => s && s.label).slice(0, 40).map(s => ({ n: (typeof s.n === "number") ? s.n : null, label: String(s.label) })) : [];
       h.wodTxt = (typeof m.wodTxt === "string") ? m.wodTxt : "";
       h.assign = (m.assign && typeof m.assign === "object") ? m.assign : {};
-      if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || "") }));
+      if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || ""), cat: catOk(a.cat) }));
       h.metaT = m.t; changed = true;
     }
   } else if (topic.indexOf(base + "/j/") === 0) {
@@ -410,6 +422,7 @@ function bumpMeta(h) { h.metaT = nowT(); save(); pubMeta(h); }
 
 function addRep(code, aid, delta) {
   const h = getHeat(code); if (!h || h.closed || capReached(h)) return;
+  if (!h.startAt || Date.now() < h.startAt) { toast("Si conta dal VIA dell'head judge"); return; }
   const cur = h.counts[aid] || { r: 0, t: 0 };
   if (cur.fin != null) return; // atleta arrivato: conteggio bloccato
   const r = Math.max(0, (cur.r | 0) + delta);
@@ -623,10 +636,11 @@ function vNew() {
     </div>`;
   for (let i = 0; i < 5; i++) addAthRow();
 }
-window.addAthRow = (val) => {
+window.addAthRow = (val, cat) => {
   const d = document.createElement("div");
   d.className = "athrow";
   d.innerHTML = `<input type="text" class="grow athname" placeholder="Nome atleta" maxlength="30" value="${esc(typeof val === "string" ? val : "")}">
+    <select class="athcat">${CATS.map(c => `<option value="${c[0]}" ${catOk(cat) === c[0] ? "selected" : ""}>${c[1]}</option>`).join("")}</select>
     <button class="btn sec small" onclick="this.parentNode.remove()">✕</button>`;
   document.getElementById("athletes").appendChild(d);
 };
@@ -635,12 +649,14 @@ window.segPick = (b) => {
   b.classList.add("on");
 };
 window.createHeat = () => {
-  const names = [...document.querySelectorAll(".athname")].map(i => i.value.trim()).filter(Boolean);
-  if (names.length < 1) { toast("Inserisci almeno un atleta"); return; }
+  const rowsA = [...document.querySelectorAll("#athletes .athrow")]
+    .map(r => ({ name: r.querySelector(".athname").value.trim(), cat: catOk(r.querySelector(".athcat") && r.querySelector(".athcat").value) }))
+    .filter(x => x.name);
+  if (rowsA.length < 1) { toast("Inserisci almeno un atleta"); return; }
   let code = newCode(); while (db.heats[code]) code = newCode();
   const h = ensureHeat(code);
   h.name = (document.getElementById("hname").value || "").trim();
-  h.athletes = names.map(n => ({ id: newId(), name: n }));
+  h.athletes = rowsA.map(x => ({ id: newId(), name: x.name, cat: x.cat }));
   const seg = document.querySelector("#wodseg .on");
   h.wod = seg && (seg.dataset.w === "amrap" || seg.dataset.w === "emom") ? seg.dataset.w : "fortime";
   h.wodTxt = (document.getElementById("wodtxt").value || "").trim();
@@ -687,7 +703,7 @@ function vHub(code) {
           <b>${esc(j.name)}</b>${dev === DEVICE ? ' <span class="muted">(questo dispositivo)</span>' : ""}
           <select onchange="assignJudge('${code}','${dev}',this.value)">
             <option value="">— assegna atleta —</option>
-            ${h.athletes.map(a => `<option value="${a.id}" ${(h.assign || {})[dev] === a.id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
+            ${h.athletes.map(a => `<option value="${a.id}" ${(h.assign || {})[dev] === a.id ? "selected" : ""}>${esc(a.name)}${a.cat ? " (" + a.cat.toUpperCase() + ")" : ""}</option>`).join("")}
           </select>
         </div>`).join("") : `<p class="muted">Nessun giudice ancora. Quando aprono il link, inseriscono il codice <b style="color:var(--acc)">${esc(code)}</b> e il loro nome, compaiono qui e gli assegni l'atleta.</p>`}
     </div>
@@ -765,7 +781,7 @@ function vJudge(code, aid) {
         ${h.athletes.map(a => {
           const c = h.counts[a.id] || { r: 0 };
           return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
-          <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
+          <span>${esc(a.name)}${catChip(a.cat)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
         }).join("") || '<p class="muted">Ancora nessun atleta ricevuto… controlla che il pallino in alto sia verde.</p>'}
       </div>
       <p class="muted center" style="margin-top:14px">Non sei ${esc(jn)}? <button class="linkbtn" onclick="changeJname()">cambia nome</button>
@@ -779,16 +795,16 @@ function vJudge(code, aid) {
   const fin = c.fin != null;
   const capd = capReached(h);
   const running = h.startAt && Date.now() >= h.startAt && !capd;
-  const locked = h.closed || fin || capd;
+  const locked = h.closed || fin || capd || !running;
   const mine = assigned === aid;
   let timerHtml = "";
   if (fin) timerHtml = `<p class="jtimer done">🏁 ${fmtMs(c.fin)}</p>`;
   else if (capd) timerHtml = `<p class="jtimer done">⏰ TIME CAP</p>`;
   else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}" data-cap="${h.capMin || 0}">${tickTxt(h.startAt, h.capMin)}</p>`;
-  else timerHtml = `<p class="jtimer off">timer non partito — puoi già contare, il tempo parte con lo START dell'head judge</p>`;
+  else timerHtml = `<p class="jtimer off">in attesa dello START dell'head judge</p>`;
   app().innerHTML = `
     ${mine ? "" : header("h/" + code + "/judge")}
-    <p class="jname">${esc(a.name)}</p>
+    <p class="jname">${esc(a.name)}${catChip(a.cat)}</p>
     <p class="jsub">${esc(h.name || "heat " + code)} · ${modeLbl(h.wod)}${mine ? " · 👨‍⚖️ " + esc(jn) : ""}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : (capd ? " — TIME CAP" : ""))}</p>
     ${timerHtml}
     <div id="wodbox">${stepsWidget(h, c.r | 0)}</div>
@@ -796,7 +812,7 @@ function vJudge(code, aid) {
     <div class="tapzone ${locked ? "locked" : ""}" id="tapzone">
       <div class="flash" id="flash"></div>
       <div class="plus">+1</div>
-      <div class="lbl">TOCCA PER CONTARE</div>
+      <div class="lbl">${running ? "TOCCA PER CONTARE" : "SI CONTA DAL VIA"}</div>
     </div>
     ${ft && running && !fin && !h.closed ? `<button class="btn fin" onclick="finishAth('${code}','${aid}')">🏁 ARRIVO — ferma il tempo</button>` : ""}
     ${ft && fin && !h.closed ? `<button class="btn warn" style="margin-top:12px" onclick="unfinishAth('${code}','${aid}')">Annulla arrivo (${fmtMs(c.fin)})</button>` : ""}
@@ -844,9 +860,10 @@ function vGrid(code) {
       ${h.athletes.map(a => {
         const c = h.counts[a.id] || { r: 0 };
         const fin = c.fin != null;
-        const lk = h.closed || fin || capd;
+        const running = h.startAt && Date.now() >= h.startAt && !capd;
+        const lk = h.closed || fin || capd || !running;
         return `<div class="gtile">
-          <div class="nm">${esc(a.name)}</div>
+          <div class="nm">${esc(a.name)}${catChip(a.cat)}</div>
           <div class="ct">${fin ? '<span class="ftime">🏁 ' + fmtMs(c.fin) + "</span>" : c.r | 0}</div>
           <button class="plusb" ${lk ? "disabled" : ""} data-aid="${a.id}">+1</button>
           ${h.wod === "fortime" && h.startAt && Date.now() >= h.startAt && !capd && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
@@ -863,15 +880,17 @@ function vGrid(code) {
 function vBoard(code) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
-  const rows = h.athletes
-    .map(a => { const c = h.counts[a.id] || { r: 0 }; return { id: a.id, name: a.name, r: c.r | 0, fin: (c.fin != null) ? c.fin : null }; })
+  const mkRows = list => list
+    .map(a => { const c = h.counts[a.id] || { r: 0 }; return { id: a.id, name: a.name, cat: catOk(a.cat), r: c.r | 0, fin: (c.fin != null) ? c.fin : null }; })
     .sort((x, y) => {
       if (x.fin != null && y.fin != null) return x.fin - y.fin;
       if (x.fin != null) return -1;
       if (y.fin != null) return 1;
       return y.r - x.r;
     });
-  const max = Math.max(1, ...rows.map(x => x.r));
+  const usedCats = [...CATS.map(c => c[0]), ""].filter(cv => h.athletes.some(a => catOk(a.cat) === cv));
+  const grouped = usedCats.length > 1;
+  const max = Math.max(1, ...h.athletes.map(a => (h.counts[a.id] || { r: 0 }).r | 0));
   const capd = capReached(h);
   const timerTop = h.startAt
     ? `<span class="cd big" data-tick="${h.startAt}" data-cap="${h.capMin || 0}">${tickTxt(h.startAt, h.capMin)}</span>`
@@ -884,14 +903,18 @@ function vBoard(code) {
       ${timerTop}
       ${h.closed ? '<span class="final">FINALE</span>' : (capd ? '<span class="final">TIME CAP</span>' : "")}
     </div>
-    <p class="muted" style="margin:2px 0 8px">Classifica live${h.startAt ? " — 🏁 = tempo fermato" : ""}</p>
-    ${rows.map((a, i) => `
+    <p class="muted" style="margin:2px 0 8px">Classifica live${grouped ? " per categoria" : ""}${h.startAt ? " — 🏁 = tempo fermato" : ""}</p>
+    ${usedCats.map(cv => {
+      const rows = mkRows(h.athletes.filter(a => catOk(a.cat) === cv));
+      if (!rows.length) return "";
+      return (grouped ? `<div class="cathead">${cv ? cv.toUpperCase() : "ALTRI"}</div>` : "") + rows.map((a, i) => `
       <div class="brow p${i + 1}">
         <div class="bar" style="width:${(a.r / max) * 100}%"></div>
         <div class="pos">${i + 1}</div>
-        <div class="nm">${esc(a.name)}</div>
+        <div class="nm">${esc(a.name)}${grouped ? "" : catChip(a.cat)}</div>
         <div class="rp">${a.fin != null ? "🏁 " + fmtMs(a.fin) : a.r + '<small>rep</small>' + (capd && h.wod === "fortime" ? '<small style="color:var(--amber)">CAP</small>' : "")}</div>
-      </div>`).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
+      </div>`).join("");
+    }).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
     <div class="row" style="margin-top:16px">
       <button class="btn sec small grow" onclick="exportCsv('${code}')">⬇ Esporta CSV</button>
       <button class="btn sec small grow" onclick="copyBoard('${code}')">Copia classifica</button>
@@ -906,20 +929,26 @@ window.goFull = () => {
 };
 function boardRows(code) {
   const h = getHeat(code); if (!h) return [];
-  return h.athletes
-    .map(a => { const c = h.counts[a.id] || { r: 0 }; return { name: a.name, r: c.r | 0, fin: (c.fin != null) ? c.fin : null }; })
-    .sort((x, y) => {
-      if (x.fin != null && y.fin != null) return x.fin - y.fin;
-      if (x.fin != null) return -1;
-      if (y.fin != null) return 1;
-      return y.r - x.r;
-    });
+  const srt = (x, y) => {
+    if (x.fin != null && y.fin != null) return x.fin - y.fin;
+    if (x.fin != null) return -1;
+    if (y.fin != null) return 1;
+    return y.r - x.r;
+  };
+  const out = [];
+  [...CATS.map(c => c[0]), ""].forEach(cv => {
+    const rows = h.athletes.filter(a => catOk(a.cat) === cv)
+      .map(a => { const c = h.counts[a.id] || { r: 0 }; return { name: a.name, cat: cv, r: c.r | 0, fin: (c.fin != null) ? c.fin : null }; })
+      .sort(srt);
+    rows.forEach((r, i) => { r.pos = i + 1; out.push(r); });
+  });
+  return out;
 }
 window.exportCsv = (code) => {
   const h = getHeat(code);
   const rows = boardRows(code);
   const capd = h && capReached(h) && h.wod === "fortime";
-  const csv = "Posizione;Atleta;Reps;Tempo\r\n" + rows.map((a, i) => (i + 1) + ';"' + a.name.replace(/"/g, '""') + '";' + a.r + ";" + (a.fin != null ? fmtMs(a.fin) : (capd ? "CAP" : ""))).join("\r\n") + "\r\n";
+  const csv = "Categoria;Posizione;Atleta;Reps;Tempo\r\n" + rows.map(a => (a.cat ? a.cat.toUpperCase() : "") + ";" + a.pos + ';"' + a.name.replace(/"/g, '""') + '";' + a.r + ";" + (a.fin != null ? fmtMs(a.fin) : (capd ? "CAP" : ""))).join("\r\n") + "\r\n";
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
   const aEl = document.createElement("a");
   aEl.href = URL.createObjectURL(blob);
@@ -930,7 +959,7 @@ window.exportCsv = (code) => {
 window.copyBoard = async (code) => {
   const h = getHeat(code);
   const rows = boardRows(code);
-  const txt = (h && h.name ? h.name + "\n" : "") + rows.map((a, i) => (i + 1) + ". " + a.name + " — " + (a.fin != null ? fmtMs(a.fin) : a.r + " rep")).join("\n");
+  const txt = (h && h.name ? h.name + "\n" : "") + rows.map(a => (a.cat ? "[" + a.cat.toUpperCase() + "] " : "") + a.pos + ". " + a.name + " — " + (a.fin != null ? fmtMs(a.fin) : a.r + " rep")).join("\n");
   try { await navigator.clipboard.writeText(txt); toast("Classifica copiata"); } catch (e) { toast("Copia non riuscita"); }
 };
 
@@ -956,6 +985,7 @@ function vSetup(code) {
       <div id="athletes">
         ${h.athletes.map(a => `<div class="athrow" data-aid="${a.id}">
           <input type="text" class="grow athname" maxlength="30" value="${esc(a.name)}">
+          <select class="athcat">${CATS.map(c => `<option value="${c[0]}" ${catOk(a.cat) === c[0] ? "selected" : ""}>${c[1]}</option>`).join("")}</select>
           <button class="btn sec small" onclick="this.parentNode.remove()">✕</button>
         </div>`).join("")}
       </div>
@@ -973,7 +1003,7 @@ window.saveSetup = (code) => {
     const nm = r.querySelector(".athname").value.trim();
     if (!nm) return;
     const aid = r.dataset.aid || newId();
-    ath.push({ id: aid, name: nm });
+    ath.push({ id: aid, name: nm, cat: catOk(r.querySelector(".athcat") && r.querySelector(".athcat").value) });
   });
   if (!ath.length) { toast("Serve almeno un atleta"); return; }
   h.athletes = ath;
