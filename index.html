@@ -191,6 +191,35 @@ function parseSteps(txt) {
     return m ? { n: +m[1], label: m[2] } : { n: null, label: line };
   });
 }
+function capReached(h) { return !!(h && h.startAt && h.capMin && (Date.now() - h.startAt) >= h.capMin * 60000); }
+function tickTxt(t0, capMin) {
+  const e = Date.now() - t0, cap = (capMin || 0) * 60000;
+  if (e < 0) return "VIA IN " + Math.ceil(-e / 1000);
+  if (cap && e >= cap) return "TIME CAP";
+  return fmtMs(e) + (cap ? " / " + fmtMs(cap) : "");
+}
+function heatPhase(h) {
+  if (!h || !h.startAt) return "idle";
+  const e = Date.now() - h.startAt;
+  if (e < 0) return "pre";
+  if (h.capMin && e >= h.capMin * 60000) return "cap";
+  return "run";
+}
+let actx = null;
+function beep(n) {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const now = actx.currentTime;
+    for (let i = 0; i < n; i++) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.value = (i === n - 1) ? 1250 : 880;
+      o.connect(g); g.connect(actx.destination);
+      g.gain.setValueAtTime(.35, now + i * .38);
+      g.gain.exponentialRampToValueAtTime(.001, now + i * .38 + .3);
+      o.start(now + i * .38); o.stop(now + i * .38 + .33);
+    }
+  } catch (e) {}
+}
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const DEVICE = (() => {
   let d = null;
@@ -203,7 +232,7 @@ function getJname() { try { return localStorage.getItem("contarep.jname") || "";
 function setJname(v) { try { localStorage.setItem("contarep.jname", v); } catch (e) {} }
 function getHeat(code) { return db.heats[code] || null; }
 function ensureHeat(code) {
-  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, wod: "fortime", steps: [], wodTxt: "", athletes: [], counts: {}, judges: {}, assign: {}, metaT: 0 };
+  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, capMin: null, wod: "fortime", steps: [], wodTxt: "", athletes: [], counts: {}, judges: {}, assign: {}, metaT: 0 };
   return db.heats[code];
 }
 
@@ -307,7 +336,7 @@ function pub(topic, obj) {
   }
 }
 function pubMeta(h) {
-  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, wod: h.wod || "fortime", steps: h.steps || [], wodTxt: h.wodTxt || "", assign: h.assign || {}, t: h.metaT });
+  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, capMin: h.capMin || null, wod: h.wod || "fortime", steps: h.steps || [], wodTxt: h.wodTxt || "", assign: h.assign || {}, t: h.metaT });
 }
 function pubCount(h, aid) {
   const c = h.counts[aid] || { r: 0, t: 0 };
@@ -340,6 +369,7 @@ function onMsg(code, topic, payload) {
     if (m.t > (h.metaT || 0)) {
       h.name = m.name || ""; h.closed = !!m.closed;
       h.startAt = (typeof m.startAt === "number") ? m.startAt : null;
+      h.capMin = (typeof m.capMin === "number" && m.capMin > 0) ? m.capMin : null;
       h.wod = (m.wod === "amrap" || m.wod === "emom") ? m.wod : "fortime";
       h.steps = Array.isArray(m.steps) ? m.steps.filter(s => s && s.label).slice(0, 40).map(s => ({ n: (typeof s.n === "number") ? s.n : null, label: String(s.label) })) : [];
       h.wodTxt = (typeof m.wodTxt === "string") ? m.wodTxt : "";
@@ -352,10 +382,14 @@ function onMsg(code, topic, payload) {
     if (!h.judges) h.judges = {};
     const cur = h.judges[dev] || { t: 0 };
     if (m.t > cur.t) {
-      const newName = String(m.name || "Judge");
-      const isNew = cur.name !== newName; // nuovo giudice o nome cambiato
-      h.judges[dev] = { name: newName, t: m.t };
-      if (isNew) changed = true; else save(); // solo refresh timestamp: niente ridisegno
+      if (m.gone) {
+        if (h.judges[dev]) { delete h.judges[dev]; changed = true; }
+      } else {
+        const newName = String(m.name || "Judge");
+        const isNew = cur.name !== newName; // nuovo giudice o nome cambiato
+        h.judges[dev] = { name: newName, t: m.t };
+        if (isNew) changed = true; else save(); // solo refresh timestamp: niente ridisegno
+      }
     }
   } else if (topic.indexOf(base + "/c/") === 0) {
     const aid = topic.slice((base + "/c/").length);
@@ -375,7 +409,7 @@ function nowT() { lastT = Math.max(Date.now(), lastT + 1); return lastT; } // ti
 function bumpMeta(h) { h.metaT = nowT(); save(); pubMeta(h); }
 
 function addRep(code, aid, delta) {
-  const h = getHeat(code); if (!h || h.closed) return;
+  const h = getHeat(code); if (!h || h.closed || capReached(h)) return;
   const cur = h.counts[aid] || { r: 0, t: 0 };
   if (cur.fin != null) return; // atleta arrivato: conteggio bloccato
   const r = Math.max(0, (cur.r | 0) + delta);
@@ -387,7 +421,9 @@ function addRep(code, aid, delta) {
 
 window.startTimer = (code) => {
   const h = getHeat(code); if (!h || h.closed) return;
-  h.startAt = Date.now(); bumpMeta(h); render();
+  h.startAt = Date.now() + 10000; // countdown 10s: "VIA IN..." su tutti i dispositivi
+  bumpMeta(h); render();
+  toast("Si parte tra 10 secondi!");
 };
 window.resetTimer = (code) => {
   if (!confirm("Azzerare il timer del WOD per tutti?")) return;
@@ -395,7 +431,7 @@ window.resetTimer = (code) => {
   h.startAt = null; bumpMeta(h); render();
 };
 window.finishAth = (code, aid) => {
-  const h = getHeat(code); if (!h || h.closed || !h.startAt) return;
+  const h = getHeat(code); if (!h || h.closed || !h.startAt || Date.now() < h.startAt || capReached(h)) return;
   const cur = h.counts[aid] || { r: 0, t: 0 };
   if (cur.fin != null) return;
   h.counts[aid] = { r: cur.r | 0, t: nowT(), fin: Date.now() - h.startAt };
@@ -446,7 +482,7 @@ function softRender() {
     if (asg && asg !== r.aid) return render(); // riassegnato: segui l'head judge
     const c = h.counts[r.aid] || { r: 0 };
     const el = document.getElementById("bigcount");
-    if (el && c.fin == null && !h.closed) {
+    if (el && c.fin == null && !h.closed && !capReached(h)) {
       el.textContent = c.r | 0;
       const wb = document.getElementById("wodbox");
       if (wb) {
@@ -471,7 +507,8 @@ function stepsWidget(h, count) {
     `<li class="${i < doneUpTo ? "done" : ""}${i === curIdx ? " cur" : ""}" data-lb="${esc((s.n ? s.n + " " : "") + s.label)}">${s.n ? s.n + " " : ""}${esc(s.label)}</li>`;
   const olFull = (curIdx, doneUpTo) => "<ol>" + st.map((s, i) => li(s, i, curIdx, doneUpTo)).join("") + "</ol>";
   if (h.wod === "emom") {
-    if (!h.startAt) return `<div class="wodbox"><div class="wodhead">📋 EMOM — la scaletta gira con lo START</div>${olFull(-1, 0)}</div>`;
+    if (!h.startAt || Date.now() < h.startAt) return `<div class="wodbox"><div class="wodhead">📋 EMOM — la scaletta gira con lo START</div>${olFull(-1, 0)}</div>`;
+    if (capReached(h)) return `<div class="wodbox"><div class="wodhead">📋 EMOM — TIME CAP</div><div class="wodcur done">✅ WOD concluso</div>${olFull(-1, st.length)}</div>`;
     const n = st.length;
     const elMin = Math.floor((Date.now() - h.startAt) / 60000);
     const idx = elMin % n;
@@ -576,6 +613,9 @@ function vNew() {
 9 Thruster
 9 Pull-up"></textarea>
       <p class="muted" style="margin-top:6px">Il numero davanti = rep di quello step: il giudice vedrà avanzare la scaletta da solo mentre conta.</p>
+      <h3 style="margin-top:16px">Time cap</h3>
+      <input type="text" id="capmin" inputmode="numeric" placeholder="Minuti (vuoto = nessun cap)">
+      <p class="muted" style="margin-top:6px">Al cap i conteggi si bloccano da soli su tutti i dispositivi; nei For Time chi non ha chiuso resta a rep (CAP).</p>
       <h3 style="margin-top:16px">Atleti</h3>
       <div id="athletes"></div>
       <button class="btn sec small" onclick="addAthRow()">+ aggiungi atleta</button>
@@ -605,6 +645,8 @@ window.createHeat = () => {
   h.wod = seg && (seg.dataset.w === "amrap" || seg.dataset.w === "emom") ? seg.dataset.w : "fortime";
   h.wodTxt = (document.getElementById("wodtxt").value || "").trim();
   h.steps = parseSteps(h.wodTxt);
+  const cmN = parseInt(document.getElementById("capmin").value, 10);
+  h.capMin = (cmN > 0 && cmN <= 240) ? cmN : null;
   h.own = true;
   h.counts = {}; h.metaT = Date.now();
   save();
@@ -630,8 +672,8 @@ function vHub(code) {
     ${waiting ? `<div class="card"><p class="muted">In attesa dei dati dell'heat… Se l'heat esiste, arriveranno appena la connessione è attiva (pallino in alto a destra = live). Altrimenti verifica il codice.</p></div>` : ""}
     <div class="card" style="text-align:center">
       ${h.startAt
-        ? `<div class="codebox" style="letter-spacing:.06em" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</div>
-           <p class="muted">Timer WOD in corso</p>
+        ? `<div class="codebox" style="letter-spacing:.06em;font-size:40px" data-tick="${h.startAt}" data-cap="${h.capMin || 0}">${tickTxt(h.startAt, h.capMin)}</div>
+           <p class="muted">${capReached(h) ? "⏰ Time cap raggiunto — conteggi bloccati" : (Date.now() < h.startAt ? "Conto alla rovescia…" : "Timer WOD in corso" + (h.capMin ? " — cap " + h.capMin + "′" : ""))}</p>
            ${!h.closed ? `<button class="btn warn small" onclick="resetTimer('${code}')">Azzera timer</button>` : ""}`
         : (!h.closed ? `<button class="btn" onclick="startTimer('${code}')">▶ START WOD — fai partire il timer</button>
            <p class="muted" style="margin-top:8px">Parte per tutti i dispositivi: serve per fermare il tempo degli atleti che finiscono.</p>` : "")}
@@ -735,16 +777,19 @@ function vJudge(code, aid) {
   if (!a) { nav("h/" + code + "/judge"); return; }
   const c = h.counts[aid] || { r: 0 };
   const fin = c.fin != null;
-  const locked = h.closed || fin;
+  const capd = capReached(h);
+  const running = h.startAt && Date.now() >= h.startAt && !capd;
+  const locked = h.closed || fin || capd;
   const mine = assigned === aid;
   let timerHtml = "";
   if (fin) timerHtml = `<p class="jtimer done">🏁 ${fmtMs(c.fin)}</p>`;
-  else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</p>`;
+  else if (capd) timerHtml = `<p class="jtimer done">⏰ TIME CAP</p>`;
+  else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}" data-cap="${h.capMin || 0}">${tickTxt(h.startAt, h.capMin)}</p>`;
   else timerHtml = `<p class="jtimer off">timer non partito — puoi già contare, il tempo parte con lo START dell'head judge</p>`;
   app().innerHTML = `
     ${mine ? "" : header("h/" + code + "/judge")}
     <p class="jname">${esc(a.name)}</p>
-    <p class="jsub">${esc(h.name || "heat " + code)} · ${modeLbl(h.wod)}${mine ? " · 👨‍⚖️ " + esc(jn) : ""}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
+    <p class="jsub">${esc(h.name || "heat " + code)} · ${modeLbl(h.wod)}${mine ? " · 👨‍⚖️ " + esc(jn) : ""}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : (capd ? " — TIME CAP" : ""))}</p>
     ${timerHtml}
     <div id="wodbox">${stepsWidget(h, c.r | 0)}</div>
     <div class="count" id="bigcount">${c.r | 0}</div>
@@ -753,13 +798,13 @@ function vJudge(code, aid) {
       <div class="plus">+1</div>
       <div class="lbl">TOCCA PER CONTARE</div>
     </div>
-    ${ft && h.startAt && !fin && !h.closed ? `<button class="btn fin" onclick="finishAth('${code}','${aid}')">🏁 ARRIVO — ferma il tempo</button>` : ""}
+    ${ft && running && !fin && !h.closed ? `<button class="btn fin" onclick="finishAth('${code}','${aid}')">🏁 ARRIVO — ferma il tempo</button>` : ""}
     ${ft && fin && !h.closed ? `<button class="btn warn" style="margin-top:12px" onclick="unfinishAth('${code}','${aid}')">Annulla arrivo (${fmtMs(c.fin)})</button>` : ""}
     <div class="row" style="margin-top:12px">
       <button class="btn sec grow" ${locked ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
       ${mine ? `<span class="tagchip" style="padding:8px 12px">ASSEGNATO A TE</span>` : `<button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>`}
     </div>
-    ${(fin || h.closed) ? `<button class="btn" style="margin-top:14px" onclick="nav('')">✅ FINE — il tuo lavoro è fatto, torna alla home</button>` : ""}
+    ${(fin || h.closed || capd) ? `<button class="btn" style="margin-top:14px" onclick="nav('')">✅ FINE — il tuo lavoro è fatto, torna alla home</button>` : ""}
     <p class="muted center" style="margin-top:16px"><button class="linkbtn" onclick="exitJudge()">esci e torna alla home</button></p>`;
   const tz = document.getElementById("tapzone");
   tz.addEventListener("pointerdown", e => {
@@ -776,14 +821,19 @@ window.saveJname = (code) => {
 };
 window.changeJname = () => { setJname(""); render(true); };
 window.exitJudge = () => {
-  if (confirm("Uscire e tornare alla home? I conteggi restano salvati e sincronizzati.")) nav("");
+  if (!confirm("Uscire e tornare alla home? I conteggi restano salvati e sincronizzati.")) return;
+  if (connCode && client && client.connected) {
+    try { pub(TOPIC(connCode) + "/j/" + DEVICE, { gone: true, t: nowT() }); } catch (e) {}
+  }
+  nav("");
 };
 
 function vGrid(code) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
+  const capd = capReached(h);
   const timerTop = h.startAt
-    ? `<span class="cd" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</span>`
+    ? `<span class="cd" data-tick="${h.startAt}" data-cap="${h.capMin || 0}">${tickTxt(h.startAt, h.capMin)}</span>`
     : (h.closed ? "" : `<button class="btn small" onclick="startTimer('${code}')">▶ START</button>`);
   app().innerHTML = `
     ${header("h/" + code)}
@@ -794,12 +844,12 @@ function vGrid(code) {
       ${h.athletes.map(a => {
         const c = h.counts[a.id] || { r: 0 };
         const fin = c.fin != null;
-        const lk = h.closed || fin;
+        const lk = h.closed || fin || capd;
         return `<div class="gtile">
           <div class="nm">${esc(a.name)}</div>
           <div class="ct">${fin ? '<span class="ftime">🏁 ' + fmtMs(c.fin) + "</span>" : c.r | 0}</div>
           <button class="plusb" ${lk ? "disabled" : ""} data-aid="${a.id}">+1</button>
-          ${h.wod === "fortime" && h.startAt && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
+          ${h.wod === "fortime" && h.startAt && Date.now() >= h.startAt && !capd && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
           ${fin && !h.closed ? `<button class="minusb" onclick="unfinishAth('${code}','${a.id}')">annulla arrivo</button>` : ""}
           ${!lk ? `<button class="minusb" onclick="addRep('${code}','${a.id}',-1)">−1 correzione</button>` : ""}
         </div>`;
@@ -822,8 +872,9 @@ function vBoard(code) {
       return y.r - x.r;
     });
   const max = Math.max(1, ...rows.map(x => x.r));
+  const capd = capReached(h);
   const timerTop = h.startAt
-    ? `<span class="cd big" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</span>`
+    ? `<span class="cd big" data-tick="${h.startAt}" data-cap="${h.capMin || 0}">${tickTxt(h.startAt, h.capMin)}</span>`
     : (h.closed ? "" : `<button class="btn small" onclick="startTimer('${code}')">▶ START WOD</button>`);
   app().innerHTML = `
     ${header("h/" + code)}
@@ -831,7 +882,7 @@ function vBoard(code) {
       <h2>${esc(h.name || "Heat " + code)}</h2>
       <span class="cd">${esc(code)}</span>
       ${timerTop}
-      ${h.closed ? '<span class="final">FINALE</span>' : ""}
+      ${h.closed ? '<span class="final">FINALE</span>' : (capd ? '<span class="final">TIME CAP</span>' : "")}
     </div>
     <p class="muted" style="margin:2px 0 8px">Classifica live${h.startAt ? " — 🏁 = tempo fermato" : ""}</p>
     ${rows.map((a, i) => `
@@ -839,7 +890,7 @@ function vBoard(code) {
         <div class="bar" style="width:${(a.r / max) * 100}%"></div>
         <div class="pos">${i + 1}</div>
         <div class="nm">${esc(a.name)}</div>
-        <div class="rp">${a.fin != null ? "🏁 " + fmtMs(a.fin) : a.r + '<small>rep</small>'}</div>
+        <div class="rp">${a.fin != null ? "🏁 " + fmtMs(a.fin) : a.r + '<small>rep</small>' + (capd && h.wod === "fortime" ? '<small style="color:var(--amber)">CAP</small>' : "")}</div>
       </div>`).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
     <div class="row" style="margin-top:16px">
       <button class="btn sec small grow" onclick="exportCsv('${code}')">⬇ Esporta CSV</button>
@@ -867,7 +918,8 @@ function boardRows(code) {
 window.exportCsv = (code) => {
   const h = getHeat(code);
   const rows = boardRows(code);
-  const csv = "Posizione;Atleta;Reps;Tempo\r\n" + rows.map((a, i) => (i + 1) + ';"' + a.name.replace(/"/g, '""') + '";' + a.r + ";" + (a.fin != null ? fmtMs(a.fin) : "")).join("\r\n") + "\r\n";
+  const capd = h && capReached(h) && h.wod === "fortime";
+  const csv = "Posizione;Atleta;Reps;Tempo\r\n" + rows.map((a, i) => (i + 1) + ';"' + a.name.replace(/"/g, '""') + '";' + a.r + ";" + (a.fin != null ? fmtMs(a.fin) : (capd ? "CAP" : ""))).join("\r\n") + "\r\n";
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
   const aEl = document.createElement("a");
   aEl.href = URL.createObjectURL(blob);
@@ -898,6 +950,8 @@ function vSetup(code) {
       </div>
       <h3 style="margin-top:16px">Scaletta WOD <span class="muted" style="font-weight:400;font-size:13px">(una riga per movimento)</span></h3>
       <textarea id="wodtxt" maxlength="800">${esc(h.wodTxt || "")}</textarea>
+      <h3 style="margin-top:16px">Time cap</h3>
+      <input type="text" id="capmin" inputmode="numeric" placeholder="Minuti (vuoto = nessun cap)" value="${h.capMin || ""}">
       <h3 style="margin-top:16px">Atleti</h3>
       <div id="athletes">
         ${h.athletes.map(a => `<div class="athrow" data-aid="${a.id}">
@@ -927,6 +981,8 @@ window.saveSetup = (code) => {
   if (seg) h.wod = (seg.dataset.w === "amrap" || seg.dataset.w === "emom") ? seg.dataset.w : "fortime";
   h.wodTxt = (document.getElementById("wodtxt").value || "").trim();
   h.steps = parseSteps(h.wodTxt);
+  const cmS = parseInt(document.getElementById("capmin").value, 10);
+  h.capMin = (cmS > 0 && cmS <= 240) ? cmS : null;
   const keep = {};
   ath.forEach(a => keep[a.id] = 1);
   for (const k in h.counts) if (!keep[k]) delete h.counts[k];
@@ -962,23 +1018,40 @@ document.addEventListener("focusout", () => {
   if (pendingRender) setTimeout(() => { if (pendingRender && !uiBusy()) render(); }, 120);
 });
 render();
+let phHeat = "", phVal = "";
 setInterval(() => {
   if (pendingRender && !uiBusy()) { render(); return; }
+  // transizioni di fase del WOD: via / time cap
+  const cur = connCode ? getHeat(connCode) : null;
+  if (cur) {
+    const v = heatPhase(cur);
+    if (phHeat !== connCode) { phHeat = connCode; phVal = v; }
+    else if (v !== phVal) {
+      phVal = v;
+      if (v === "run") { // VIA!
+        if (navigator.vibrate) { try { navigator.vibrate([120, 60, 120, 60, 250]); } catch (e) {} }
+        beep(3); render();
+      } else if (v === "cap") { // TIME CAP
+        if (navigator.vibrate) { try { navigator.vibrate([400, 100, 400]); } catch (e) {} }
+        beep(4); render();
+      } else render();
+    }
+  } else { phHeat = ""; phVal = ""; }
   document.querySelectorAll("[data-tick]").forEach(el => {
     const st = +el.dataset.tick;
-    if (st) el.textContent = fmtMs(Date.now() - st);
+    if (st) el.textContent = tickTxt(st, +el.dataset.cap || 0);
   });
   document.querySelectorAll("[data-emom]").forEach(box => {
     const start = +box.dataset.emom, n = +box.dataset.n || 1;
-    if (!start) return;
+    if (!start || Date.now() < start) return;
     const elMin = Math.floor((Date.now() - start) / 60000);
     const idx = elMin % n;
     const head = box.querySelector(".wodhead");
     if (head) head.textContent = "📋 EMOM — minuto " + (elMin + 1);
     const lis = box.querySelectorAll("li");
     lis.forEach((li, i) => li.classList.toggle("cur", i === idx));
-    const cur = box.querySelector(".wodcur");
-    if (cur && lis[idx]) cur.textContent = "▶ " + (lis[idx].dataset.lb || "");
+    const wc = box.querySelector(".wodcur");
+    if (wc && lis[idx]) wc.textContent = "▶ " + (lis[idx].dataset.lb || "");
   });
 }, 250);
 loadLib(() => { if (connCode) connect(connCode); }); // precarica la libreria di sync
