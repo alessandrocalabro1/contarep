@@ -127,6 +127,14 @@
     color:var(--dim);font-family:'Barlow Condensed';font-size:19px;font-weight:600;cursor:pointer;letter-spacing:.04em}
   .seg button span{display:block;font-family:'Barlow';font-size:12px;font-weight:400;margin-top:3px;letter-spacing:0}
   .seg button.on{border-color:var(--acc);color:var(--acc);background:rgba(56,224,123,.10)}
+  .jrow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .jrow:last-child{border-bottom:none}
+  .jrow b{font-family:'Barlow Condensed';font-size:19px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .jrow select{max-width:55%}
+  select{background:var(--card2);border:1px solid var(--line);border-radius:10px;color:var(--txt);
+    padding:10px 12px;font-size:15px;font-family:'Barlow';outline:none}
+  select:focus{border-color:var(--acc)}
+  .waitpulse{font-size:38px;animation:pulse 1.6s infinite}
   .btn.fin{background:var(--amber);color:#3a2600;margin-top:12px}
   .jtimer{font-family:'Barlow Condensed';font-weight:700;font-size:34px;text-align:center;margin:2px 0 0;
     font-variant-numeric:tabular-nums;color:var(--acc)}
@@ -169,9 +177,11 @@ const DEVICE = (() => {
   return d;
 })();
 
+function getJname() { try { return localStorage.getItem("contarep.jname") || ""; } catch (e) { return ""; } }
+function setJname(v) { try { localStorage.setItem("contarep.jname", v); } catch (e) {} }
 function getHeat(code) { return db.heats[code] || null; }
 function ensureHeat(code) {
-  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, wod: "fortime", athletes: [], counts: {}, metaT: 0 };
+  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, wod: "fortime", athletes: [], counts: {}, judges: {}, assign: {}, metaT: 0 };
   return db.heats[code];
 }
 
@@ -275,15 +285,22 @@ function pub(topic, obj) {
   }
 }
 function pubMeta(h) {
-  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, wod: h.wod || "fortime", t: h.metaT });
+  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, wod: h.wod || "fortime", assign: h.assign || {}, t: h.metaT });
 }
 function pubCount(h, aid) {
   const c = h.counts[aid] || { r: 0, t: 0 };
   pub(TOPIC(h.code) + "/c/" + aid, { r: c.r, t: c.t, fin: (typeof c.fin === "number") ? c.fin : null, by: DEVICE });
 }
+function pubPresence(code) {
+  const jn = getJname();
+  if (!jn || !client || !client.connected) return;
+  if (route().v !== "judge") return; // solo i dispositivi in modalità judge si presentano
+  pub(TOPIC(code) + "/j/" + DEVICE, { name: jn, t: nowT() });
+}
 function republishNewer(code) {
   const h = getHeat(code);
   if (!h || !client || !client.connected) return;
+  pubPresence(code);
   if ((h.metaT || 0) > (recvT[TOPIC(code) + "/meta"] || 0)) pubMeta(h);
   for (const aid in h.counts) {
     if ((h.counts[aid].t || 0) > (recvT[TOPIC(code) + "/c/" + aid] || 0)) pubCount(h, aid);
@@ -302,15 +319,25 @@ function onMsg(code, topic, payload) {
       h.name = m.name || ""; h.closed = !!m.closed;
       h.startAt = (typeof m.startAt === "number") ? m.startAt : null;
       h.wod = (m.wod === "amrap") ? "amrap" : "fortime";
+      h.assign = (m.assign && typeof m.assign === "object") ? m.assign : {};
       if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || "") }));
       h.metaT = m.t; changed = true;
     }
+  } else if (topic.indexOf(base + "/j/") === 0) {
+    const dev = topic.slice((base + "/j/").length);
+    if (!h.judges) h.judges = {};
+    const cur = h.judges[dev] || { t: 0 };
+    if (m.t > cur.t) { h.judges[dev] = { name: String(m.name || "Judge"), t: m.t }; changed = true; }
   } else if (topic.indexOf(base + "/c/") === 0) {
     const aid = topic.slice((base + "/c/").length);
     const cur = h.counts[aid] || { r: 0, t: 0 };
     if (m.t > cur.t) { h.counts[aid] = { r: Math.max(0, m.r | 0), t: m.t, fin: (typeof m.fin === "number") ? m.fin : null }; changed = true; }
   }
-  if (changed) { save(); softRender(); }
+  if (changed) {
+    save();
+    if (topic === base + "/meta" || topic.indexOf(base + "/j/") === 0) render();
+    else softRender();
+  }
 }
 
 /* ---------- azioni ---------- */
@@ -386,10 +413,13 @@ function softRender() {
   if (key !== lastView) { render(); return; }
   if (r.v === "judge" && r.aid) {
     const h = getHeat(r.code); if (!h) return render();
+    const asg = (h.assign || {})[DEVICE];
+    if (asg && asg !== r.aid) return render(); // riassegnato: segui l'head judge
+    const c = h.counts[r.aid] || { r: 0 };
     const el = document.getElementById("bigcount");
-    if (el) el.textContent = (h.counts[r.aid] || { r: 0 }).r;
+    if (el && c.fin == null && !h.closed) el.textContent = c.r | 0;
     else render();
-  } else if (r.v === "grid" || r.v === "board" || r.v === "hub") {
+  } else {
     render();
   }
 }
@@ -518,6 +548,17 @@ function vHub(code) {
         : (!h.closed ? `<button class="btn" onclick="startTimer('${code}')">▶ START WOD — fai partire il timer</button>
            <p class="muted" style="margin-top:8px">Parte per tutti i dispositivi: serve per fermare il tempo degli atleti che finiscono.</p>` : "")}
     </div>
+    <div class="card">
+      <h3>👨‍⚖️ Giudici collegati</h3>
+      ${Object.keys(h.judges || {}).length ? Object.entries(h.judges).map(([dev, j]) => `
+        <div class="jrow">
+          <b>${esc(j.name)}</b>${dev === DEVICE ? ' <span class="muted">(questo dispositivo)</span>' : ""}
+          <select onchange="assignJudge('${code}','${dev}',this.value)">
+            <option value="">— assegna atleta —</option>
+            ${h.athletes.map(a => `<option value="${a.id}" ${(h.assign || {})[dev] === a.id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
+          </select>
+        </div>`).join("") : `<p class="muted">Nessun giudice ancora. Quando aprono il link, inseriscono il codice <b style="color:var(--acc)">${esc(code)}</b> e il loro nome, compaiono qui e gli assegni l'atleta.</p>`}
+    </div>
     <div class="rolegrid">
       <div class="role" onclick="nav('h/${code}/judge')"><div class="ic">👨‍⚖️</div><b>Giudice</b><span>conta le rep di un atleta</span></div>
       <div class="role" onclick="nav('h/${code}/board')"><div class="ic">🏆</div><b>Scoreboard</b><span>classifica live per lo schermo</span></div>
@@ -531,6 +572,13 @@ function vHub(code) {
       </div>
     </div>`;
 }
+window.assignJudge = (code, dev, aid) => {
+  const h = getHeat(code); if (!h) return;
+  if (!h.assign) h.assign = {};
+  if (aid) h.assign[dev] = aid; else delete h.assign[dev];
+  bumpMeta(h);
+  toast(aid ? "Atleta assegnato" : "Assegnazione rimossa");
+};
 window.shareHeat = async (code) => {
   const url = location.protocol.indexOf("http") === 0 ? location.href.split("#")[0] + "#h/" + code : "";
   const txt = url ? "ContaRep — heat " + code + ": " + url : "ContaRep — codice heat: " + code;
@@ -551,35 +599,64 @@ function vJudge(code, aid) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
   const ft = h.wod !== "amrap";
-  if (!aid) {
+  const jn = getJname();
+  if (!jn) {
     app().innerHTML = `
       ${header("")}
-      <h2>Chi stai giudicando?</h2>
-      <p class="muted" style="margin:-4px 0 10px">${esc(h.name || "Heat " + code)} · ${ft ? "FOR TIME" : "AMRAP"} · codice ${esc(code)}</p>
-      <div class="pick">
-        ${h.athletes.map(a => {
-          const c = h.counts[a.id] || { r: 0 };
-          return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
-          <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
-        }).join("") ||
-        '<p class="muted">In attesa dei dati dell\'heat… verifica che il codice sia giusto e che il pallino in alto sia verde.</p>'}
-      </div>
-      <p class="muted center" style="margin-top:22px">Sei l'head judge di questo heat? <button class="linkbtn" onclick="nav('h/${code}')">apri il pannello</button></p>`;
+      <h2>Ciao judge! 👨‍⚖️</h2>
+      <div class="card">
+        <p class="muted">Dì all'head judge chi sei: comparirai sul suo pannello e ti assegnerà l'atleta da giudicare.</p>
+        <input type="text" id="jnamein" placeholder="Il tuo nome (es. Ale C.)" maxlength="24" style="margin-top:10px">
+        <button class="btn" style="margin-top:12px" onclick="saveJname('${code}')">Continua</button>
+      </div>`;
+    const inp = document.getElementById("jnamein");
+    inp.focus();
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") saveJname(code); });
     return;
   }
+  pubPresence(code);
+  const assigned = (h.assign || {})[DEVICE] || null;
+  const okAssigned = assigned && h.athletes.some(a => a.id === assigned);
+  if (!aid) {
+    if (okAssigned) { nav("h/" + code + "/judge/" + assigned); return; }
+    app().innerHTML = `
+      ${header("")}
+      <h2>Ciao ${esc(jn)}!</h2>
+      <div class="card" style="text-align:center">
+        <div class="waitpulse">⏳</div>
+        <h3>In attesa di assegnazione</h3>
+        <p class="muted">Sei collegato all'heat <b style="color:var(--acc)">${esc(code)}</b>${h.name ? " — " + esc(h.name) : ""}.<br>
+        L'head judge ti sta per assegnare un atleta: appena lo fa, questa schermata si apre da sola sul suo contatore.</p>
+      </div>
+      <details>
+        <summary>L'head judge è impegnato? Scegli tu l'atleta</summary>
+        <div class="pick" style="margin-top:10px">
+          ${h.athletes.map(a => {
+            const c = h.counts[a.id] || { r: 0 };
+            return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
+            <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
+          }).join("") || '<p class="muted">Ancora nessun atleta ricevuto…</p>'}
+        </div>
+      </details>
+      <p class="muted center" style="margin-top:14px">Non sei ${esc(jn)}? <button class="linkbtn" onclick="changeJname()">cambia nome</button>
+      · Sei l'head judge? <button class="linkbtn" onclick="nav('h/${code}')">apri il pannello</button></p>`;
+    return;
+  }
+  if (okAssigned && assigned !== aid) { nav("h/" + code + "/judge/" + assigned); return; }
   const a = h.athletes.find(x => x.id === aid);
   if (!a) { nav("h/" + code + "/judge"); return; }
   const c = h.counts[aid] || { r: 0 };
   const fin = c.fin != null;
   const locked = h.closed || fin;
+  const mine = assigned === aid;
   let timerHtml = "";
   if (fin) timerHtml = `<p class="jtimer done">🏁 ${fmtMs(c.fin)}</p>`;
   else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</p>`;
   else timerHtml = `<p class="jtimer off">in attesa dello start dell'head judge</p>`;
   app().innerHTML = `
-    ${header("h/" + code + "/judge")}
+    ${mine ? "" : header("h/" + code + "/judge")}
     <p class="jname">${esc(a.name)}</p>
-    <p class="jsub">${esc(h.name || "heat " + code)} · ${ft ? "FOR TIME" : "AMRAP"}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
+    <p class="jsub">${esc(h.name || "heat " + code)} · ${ft ? "FOR TIME" : "AMRAP"}${mine ? " · 👨‍⚖️ " + esc(jn) : ""}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
     ${timerHtml}
     <div class="count" id="bigcount">${c.r | 0}</div>
     <div class="tapzone ${locked ? "locked" : ""}" id="tapzone">
@@ -591,7 +668,7 @@ function vJudge(code, aid) {
     ${ft && fin && !h.closed ? `<button class="btn warn" style="margin-top:12px" onclick="unfinishAth('${code}','${aid}')">Annulla arrivo (${fmtMs(c.fin)})</button>` : ""}
     <div class="row" style="margin-top:12px">
       <button class="btn sec grow" ${locked ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
-      <button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>
+      ${mine ? `<span class="tagchip" style="padding:8px 12px">ASSEGNATO A TE</span>` : `<button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>`}
     </div>`;
   const tz = document.getElementById("tapzone");
   tz.addEventListener("pointerdown", e => {
@@ -601,6 +678,12 @@ function vJudge(code, aid) {
     f.classList.remove("go"); void f.offsetWidth; f.classList.add("go");
   });
 }
+window.saveJname = (code) => {
+  const v = (document.getElementById("jnamein").value || "").trim();
+  if (!v) { toast("Scrivi il tuo nome"); return; }
+  setJname(v); render();
+};
+window.changeJname = () => { setJname(""); render(); };
 
 function vGrid(code) {
   const h = ensureHeat(code); save();
