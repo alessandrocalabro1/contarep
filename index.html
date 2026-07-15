@@ -327,7 +327,12 @@ function onMsg(code, topic, payload) {
     const dev = topic.slice((base + "/j/").length);
     if (!h.judges) h.judges = {};
     const cur = h.judges[dev] || { t: 0 };
-    if (m.t > cur.t) { h.judges[dev] = { name: String(m.name || "Judge"), t: m.t }; changed = true; }
+    if (m.t > cur.t) {
+      const newName = String(m.name || "Judge");
+      const isNew = cur.name !== newName; // nuovo giudice o nome cambiato
+      h.judges[dev] = { name: newName, t: m.t };
+      if (isNew) changed = true; else save(); // solo refresh timestamp: niente ridisegno
+    }
   } else if (topic.indexOf(base + "/c/") === 0) {
     const aid = topic.slice((base + "/c/").length);
     const cur = h.counts[aid] || { r: 0, t: 0 };
@@ -393,7 +398,7 @@ document.addEventListener("visibilitychange", () => {
 
 /* ---------- routing ---------- */
 function nav(h) { location.hash = h; }
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => render(true));
 
 function route() {
   const p = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -628,16 +633,14 @@ function vJudge(code, aid) {
         <p class="muted">Sei collegato all'heat <b style="color:var(--acc)">${esc(code)}</b>${h.name ? " — " + esc(h.name) : ""}.<br>
         L'head judge ti sta per assegnare un atleta: appena lo fa, questa schermata si apre da sola sul suo contatore.</p>
       </div>
-      <details>
-        <summary>L'head judge è impegnato? Scegli tu l'atleta</summary>
-        <div class="pick" style="margin-top:10px">
-          ${h.athletes.map(a => {
-            const c = h.counts[a.id] || { r: 0 };
-            return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
-            <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
-          }).join("") || '<p class="muted">Ancora nessun atleta ricevuto…</p>'}
-        </div>
-      </details>
+      <p class="muted" style="margin:16px 4px 8px"><b>Oppure scegli tu l'atleta</b> — puoi iniziare subito, l'head judge può sempre riassegnarti:</p>
+      <div class="pick">
+        ${h.athletes.map(a => {
+          const c = h.counts[a.id] || { r: 0 };
+          return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
+          <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
+        }).join("") || '<p class="muted">Ancora nessun atleta ricevuto… controlla che il pallino in alto sia verde.</p>'}
+      </div>
       <p class="muted center" style="margin-top:14px">Non sei ${esc(jn)}? <button class="linkbtn" onclick="changeJname()">cambia nome</button>
       · Sei l'head judge? <button class="linkbtn" onclick="nav('h/${code}')">apri il pannello</button></p>`;
     return;
@@ -652,7 +655,7 @@ function vJudge(code, aid) {
   let timerHtml = "";
   if (fin) timerHtml = `<p class="jtimer done">🏁 ${fmtMs(c.fin)}</p>`;
   else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</p>`;
-  else timerHtml = `<p class="jtimer off">in attesa dello start dell'head judge</p>`;
+  else timerHtml = `<p class="jtimer off">timer non partito — puoi già contare, il tempo parte con lo START dell'head judge</p>`;
   app().innerHTML = `
     ${mine ? "" : header("h/" + code + "/judge")}
     <p class="jname">${esc(a.name)}</p>
@@ -681,9 +684,9 @@ function vJudge(code, aid) {
 window.saveJname = (code) => {
   const v = (document.getElementById("jnamein").value || "").trim();
   if (!v) { toast("Scrivi il tuo nome"); return; }
-  setJname(v); render();
+  setJname(v); render(true);
 };
-window.changeJname = () => { setJname(""); render(); };
+window.changeJname = () => { setJname(""); render(true); };
 
 function vGrid(code) {
   const h = ensureHeat(code); save();
@@ -837,7 +840,14 @@ window.saveSetup = (code) => {
 };
 
 /* ---------- render ---------- */
-function render() {
+let pendingRender = false;
+function uiBusy() {
+  const ae = document.activeElement;
+  return !!(ae && (ae.tagName === "SELECT" || ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") && app().contains(ae));
+}
+function render(force) {
+  if (!force && uiBusy()) { pendingRender = true; return; } // niente ridisegni sotto le dita
+  pendingRender = false;
   const r = route();
   lastView = r.v + "/" + (r.code || "");
   try { window.scrollTo(0, 0); } catch (e) {}
@@ -852,8 +862,12 @@ function render() {
 }
 window.nav = nav;
 window.addRep = addRep;
+document.addEventListener("focusout", () => {
+  if (pendingRender) setTimeout(() => { if (pendingRender && !uiBusy()) render(); }, 120);
+});
 render();
 setInterval(() => {
+  if (pendingRender && !uiBusy()) { render(); return; }
   document.querySelectorAll("[data-tick]").forEach(el => {
     const st = +el.dataset.tick;
     if (st) el.textContent = fmtMs(Date.now() - st);
