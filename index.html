@@ -110,6 +110,23 @@
     border:1px solid var(--line);color:var(--txt);border-radius:99px;padding:10px 20px;font-size:15px;
     z-index:99;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
   .toast.show{opacity:1}
+  .hero{text-align:center;padding:20px 0 8px}
+  .hero .mark{width:64px;height:64px;font-size:36px;margin:0 auto 10px;border-radius:18px;
+    background:linear-gradient(135deg,var(--acc),#19b55f);display:flex;align-items:center;justify-content:center;
+    font-family:'Barlow Condensed';font-weight:700;color:#07270f;box-shadow:0 10px 34px rgba(56,224,123,.30)}
+  .hero .hname{font-family:'Barlow Condensed';font-size:40px;font-weight:700;letter-spacing:.03em}
+  .hero .hname i{color:var(--acc);font-style:normal}
+  .hero .tag{margin:4px 0 8px}
+  .judgecard{border-color:var(--acc-dark);box-shadow:0 0 0 1px rgba(56,224,123,.15), 0 8px 26px rgba(56,224,123,.07)}
+  .linkbtn{background:none;border:none;color:var(--acc);cursor:pointer;font-size:inherit;padding:0;text-decoration:underline}
+  .center{text-align:center}
+  .tagchip{display:inline-block;background:rgba(56,224,123,.14);color:var(--acc);border:1px solid var(--acc-dark);
+    border-radius:7px;padding:1px 8px;font-family:'Barlow Condensed';font-weight:600;font-size:13.5px;letter-spacing:.08em;vertical-align:middle}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;padding:12px 8px;border-radius:12px;border:1px solid var(--line);background:var(--card2);
+    color:var(--dim);font-family:'Barlow Condensed';font-size:19px;font-weight:600;cursor:pointer;letter-spacing:.04em}
+  .seg button span{display:block;font-family:'Barlow';font-size:12px;font-weight:400;margin-top:3px;letter-spacing:0}
+  .seg button.on{border-color:var(--acc);color:var(--acc);background:rgba(56,224,123,.10)}
   .btn.fin{background:var(--amber);color:#3a2600;margin-top:12px}
   .jtimer{font-family:'Barlow Condensed';font-weight:700;font-size:34px;text-align:center;margin:2px 0 0;
     font-variant-numeric:tabular-nums;color:var(--acc)}
@@ -154,7 +171,7 @@ const DEVICE = (() => {
 
 function getHeat(code) { return db.heats[code] || null; }
 function ensureHeat(code) {
-  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, athletes: [], counts: {}, metaT: 0 };
+  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, wod: "fortime", athletes: [], counts: {}, metaT: 0 };
   return db.heats[code];
 }
 
@@ -258,7 +275,7 @@ function pub(topic, obj) {
   }
 }
 function pubMeta(h) {
-  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, t: h.metaT });
+  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, wod: h.wod || "fortime", t: h.metaT });
 }
 function pubCount(h, aid) {
   const c = h.counts[aid] || { r: 0, t: 0 };
@@ -284,6 +301,7 @@ function onMsg(code, topic, payload) {
     if (m.t > (h.metaT || 0)) {
       h.name = m.name || ""; h.closed = !!m.closed;
       h.startAt = (typeof m.startAt === "number") ? m.startAt : null;
+      h.wod = (m.wod === "amrap") ? "amrap" : "fortime";
       if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || "") }));
       h.metaT = m.t; changed = true;
     }
@@ -389,42 +407,46 @@ function header(backTo) {
 function vHome() {
   const heats = Object.values(db.heats).sort((a, b) => b.createdAt - a.createdAt);
   app().innerHTML = `
-    ${header(null)}
-    <div class="card">
-      <h3>Nuovo heat</h3>
-      <p class="muted">Crea una batteria, inserisci gli atleti e condividi il codice con i giudici.</p>
-      <button class="btn" style="margin-top:10px" onclick="nav('new')">+ Crea heat</button>
+    <div class="hero">
+      <div class="mark">CR</div>
+      <b class="hname">CONTA<i>REP</i></b>
+      <p class="tag">Rep e tempi in diretta, dal giudice allo scoreboard</p>
+    </div>
+    <div class="card judgecard">
+      <h3>👨‍⚖️ Sono un Judge</h3>
+      <p class="muted">Inserisci il codice che ti ha dato l'head judge: vai dritto al tuo atleta.</p>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="joincode" class="code grow" maxlength="5" placeholder="CODICE" autocomplete="off">
+        <button class="btn small" style="width:auto" onclick="joinCode('judge')">Entra</button>
+      </div>
+      <p class="muted center" style="margin-top:10px">Schermo di gara? <button class="linkbtn" onclick="joinCode('board')">apri lo scoreboard</button></p>
     </div>
     <div class="card">
-      <h3>Entra in un heat</h3>
-      <div class="row">
-        <input type="text" id="joincode" class="code grow" maxlength="5" placeholder="CODICE" autocomplete="off">
-        <button class="btn small" style="width:auto" onclick="joinCode()">Entra</button>
-      </div>
+      <h3>🎖️ Sono l'Head Judge</h3>
+      <p class="muted">Crea la batteria: scegli il WOD, inserisci gli atleti, dai il via e controlla tutto.</p>
+      <button class="btn" style="margin-top:10px" onclick="nav('new')">+ Crea heat</button>
     </div>
     ${heats.length ? `<div class="card"><h3>I tuoi heat</h3>
       ${heats.map(h => `
-        <div class="heatitem" onclick="nav('h/${h.code}')">
-          <div><b>${esc(h.name || "Heat " + h.code)}</b><br>
-          <span>${h.athletes.length} atleti · codice ${h.code} ${h.closed ? "· CHIUSO" : ""}</span></div>
+        <div class="heatitem" onclick="nav('h/${h.code}${h.own ? "" : "/judge"}')">
+          <div><b>${esc(h.name || "Heat " + h.code)}</b> ${h.own ? '<span class="tagchip">HEAD JUDGE</span>' : ""}<br>
+          <span>${h.athletes.length} atleti · ${h.wod === "amrap" ? "AMRAP" : "FOR TIME"} · codice ${h.code} ${h.closed ? "· CHIUSO" : ""}</span></div>
           <span>›</span>
         </div>`).join("")}
     </div>` : ""}
     <details>
       <summary>Come funziona</summary>
-      <p>1 — Chi organizza crea l'heat con i nomi degli atleti e comunica il <b>codice</b>.<br>
-      2 — Ogni giudice apre questa pagina sul suo telefono, inserisce il codice e sceglie il suo atleta: ogni tocco = 1 rep.<br>
-      3 — Su un PC/maxischermo si apre la vista <b>Scoreboard</b>: la classifica si aggiorna in tempo reale.<br>
-      4 — A fine WOD si chiude l'heat e si esporta il CSV.<br><br>
-      Serve internet per la sincronizzazione tra dispositivi. Senza connessione l'app funziona comunque su un singolo dispositivo (vista Griglia).</p>
+      <p><b>Head judge</b> — crea l'heat (nome WOD, tipo For Time o AMRAP, atleti) e comunica il codice. Dal suo pannello: ▶ START del timer, scoreboard, griglia, modifiche, chiusura e export CSV.<br><br>
+      <b>Judge</b> — apre il link, mette il codice, sceglie il suo atleta e pensa solo a lui: ogni tocco = 1 rep. Se il WOD è For Time, quando l'atleta finisce preme 🏁 ARRIVO e il tempo si ferma.<br><br>
+      Serve internet per la sincronizzazione (basta la rete mobile). Il pallino in alto a destra è verde quando sei live.</p>
     </details>`;
   const jc = document.getElementById("joincode");
-  jc.addEventListener("keydown", e => { if (e.key === "Enter") joinCode(); });
+  jc.addEventListener("keydown", e => { if (e.key === "Enter") joinCode("judge"); });
 }
-window.joinCode = () => {
+window.joinCode = (dest) => {
   const v = (document.getElementById("joincode").value || "").trim().toUpperCase();
   if (v.length < 4) { toast("Inserisci il codice heat"); return; }
-  ensureHeat(v); save(); nav("h/" + v);
+  ensureHeat(v); save(); nav("h/" + v + "/" + (dest || "judge"));
 };
 
 function vNew() {
@@ -433,6 +455,11 @@ function vNew() {
     <h2>Nuovo heat</h2>
     <div class="card">
       <input type="text" id="hname" placeholder="Nome heat (es. WOD 1 — Heat 2)" maxlength="40">
+      <h3 style="margin-top:16px">Tipo di WOD</h3>
+      <div class="seg" id="wodseg">
+        <button type="button" data-w="fortime" class="on" onclick="segPick(this)">⏱ FOR TIME<span>i giudici fermano il tempo</span></button>
+        <button type="button" data-w="amrap" onclick="segPick(this)">🔁 AMRAP<span>si contano solo le rep</span></button>
+      </div>
       <h3 style="margin-top:16px">Atleti</h3>
       <div id="athletes"></div>
       <button class="btn sec small" onclick="addAthRow()">+ aggiungi atleta</button>
@@ -447,6 +474,10 @@ window.addAthRow = (val) => {
     <button class="btn sec small" onclick="this.parentNode.remove()">✕</button>`;
   document.getElementById("athletes").appendChild(d);
 };
+window.segPick = (b) => {
+  [...b.parentNode.children].forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+};
 window.createHeat = () => {
   const names = [...document.querySelectorAll(".athname")].map(i => i.value.trim()).filter(Boolean);
   if (names.length < 1) { toast("Inserisci almeno un atleta"); return; }
@@ -454,6 +485,9 @@ window.createHeat = () => {
   const h = ensureHeat(code);
   h.name = (document.getElementById("hname").value || "").trim();
   h.athletes = names.map(n => ({ id: newId(), name: n }));
+  const seg = document.querySelector("#wodseg .on");
+  h.wod = seg && seg.dataset.w === "amrap" ? "amrap" : "fortime";
+  h.own = true;
   h.counts = {}; h.metaT = Date.now();
   save();
   ensureSync(code);
@@ -469,7 +503,8 @@ function vHub(code) {
   app().innerHTML = `
     ${header("")}
     <div class="card" style="text-align:center">
-      <h3 style="font-size:24px">${esc(h.name || "Heat")} ${h.closed ? '<span class="final">CHIUSO</span>' : ""}</h3>
+      <p class="muted" style="margin:0 0 2px;letter-spacing:.12em">🎖️ PANNELLO HEAD JUDGE</p>
+      <h3 style="font-size:24px">${esc(h.name || "Heat")} <span class="tagchip">${h.wod === "amrap" ? "AMRAP" : "FOR TIME"}</span> ${h.closed ? '<span class="final">CHIUSO</span>' : ""}</h3>
       <div class="codebox">${esc(code)}</div>
       <p class="muted">Codice heat — comunicalo ai giudici</p>
       <button class="btn sec small" onclick="shareHeat('${code}')">Copia link / condividi</button>
@@ -515,18 +550,21 @@ window.delHeat = (code) => {
 function vJudge(code, aid) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
+  const ft = h.wod !== "amrap";
   if (!aid) {
     app().innerHTML = `
-      ${header("h/" + code)}
+      ${header("")}
       <h2>Chi stai giudicando?</h2>
+      <p class="muted" style="margin:-4px 0 10px">${esc(h.name || "Heat " + code)} · ${ft ? "FOR TIME" : "AMRAP"} · codice ${esc(code)}</p>
       <div class="pick">
         ${h.athletes.map(a => {
           const c = h.counts[a.id] || { r: 0 };
           return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
           <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
         }).join("") ||
-        '<p class="muted">Nessun atleta ancora. In attesa dei dati dell\'heat…</p>'}
-      </div>`;
+        '<p class="muted">In attesa dei dati dell\'heat… verifica che il codice sia giusto e che il pallino in alto sia verde.</p>'}
+      </div>
+      <p class="muted center" style="margin-top:22px">Sei l'head judge di questo heat? <button class="linkbtn" onclick="nav('h/${code}')">apri il pannello</button></p>`;
     return;
   }
   const a = h.athletes.find(x => x.id === aid);
@@ -537,11 +575,11 @@ function vJudge(code, aid) {
   let timerHtml = "";
   if (fin) timerHtml = `<p class="jtimer done">🏁 ${fmtMs(c.fin)}</p>`;
   else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</p>`;
-  else timerHtml = `<p class="jtimer off">timer non avviato</p>`;
+  else timerHtml = `<p class="jtimer off">in attesa dello start dell'head judge</p>`;
   app().innerHTML = `
     ${header("h/" + code + "/judge")}
     <p class="jname">${esc(a.name)}</p>
-    <p class="jsub">${esc(h.name || "heat " + code)}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
+    <p class="jsub">${esc(h.name || "heat " + code)} · ${ft ? "FOR TIME" : "AMRAP"}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
     ${timerHtml}
     <div class="count" id="bigcount">${c.r | 0}</div>
     <div class="tapzone ${locked ? "locked" : ""}" id="tapzone">
@@ -549,8 +587,8 @@ function vJudge(code, aid) {
       <div class="plus">+1</div>
       <div class="lbl">TOCCA PER CONTARE</div>
     </div>
-    ${h.startAt && !fin && !h.closed ? `<button class="btn fin" onclick="finishAth('${code}','${aid}')">🏁 ARRIVO — ferma il tempo</button>` : ""}
-    ${fin && !h.closed ? `<button class="btn warn" style="margin-top:12px" onclick="unfinishAth('${code}','${aid}')">Annulla arrivo (${fmtMs(c.fin)})</button>` : ""}
+    ${ft && h.startAt && !fin && !h.closed ? `<button class="btn fin" onclick="finishAth('${code}','${aid}')">🏁 ARRIVO — ferma il tempo</button>` : ""}
+    ${ft && fin && !h.closed ? `<button class="btn warn" style="margin-top:12px" onclick="unfinishAth('${code}','${aid}')">Annulla arrivo (${fmtMs(c.fin)})</button>` : ""}
     <div class="row" style="margin-top:12px">
       <button class="btn sec grow" ${locked ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
       <button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>
@@ -584,7 +622,7 @@ function vGrid(code) {
           <div class="nm">${esc(a.name)}</div>
           <div class="ct">${fin ? '<span class="ftime">🏁 ' + fmtMs(c.fin) + "</span>" : c.r | 0}</div>
           <button class="plusb" ${lk ? "disabled" : ""} data-aid="${a.id}">+1</button>
-          ${h.startAt && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
+          ${h.wod !== "amrap" && h.startAt && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
           ${fin && !h.closed ? `<button class="minusb" onclick="unfinishAth('${code}','${a.id}')">annulla arrivo</button>` : ""}
           ${!lk ? `<button class="minusb" onclick="addRep('${code}','${a.id}',-1)">−1 correzione</button>` : ""}
         </div>`;
@@ -675,6 +713,11 @@ function vSetup(code) {
     <h2>Modifica heat</h2>
     <div class="card">
       <input type="text" id="hname" placeholder="Nome heat" maxlength="40" value="${esc(h.name)}">
+      <h3 style="margin-top:16px">Tipo di WOD</h3>
+      <div class="seg" id="wodseg">
+        <button type="button" data-w="fortime" class="${h.wod !== "amrap" ? "on" : ""}" onclick="segPick(this)">⏱ FOR TIME<span>i giudici fermano il tempo</span></button>
+        <button type="button" data-w="amrap" class="${h.wod === "amrap" ? "on" : ""}" onclick="segPick(this)">🔁 AMRAP<span>si contano solo le rep</span></button>
+      </div>
       <h3 style="margin-top:16px">Atleti</h3>
       <div id="athletes">
         ${h.athletes.map(a => `<div class="athrow" data-aid="${a.id}">
@@ -700,6 +743,8 @@ window.saveSetup = (code) => {
   });
   if (!ath.length) { toast("Serve almeno un atleta"); return; }
   h.athletes = ath;
+  const seg = document.querySelector("#wodseg .on");
+  if (seg) h.wod = seg.dataset.w === "amrap" ? "amrap" : "fortime";
   const keep = {};
   ath.forEach(a => keep[a.id] = 1);
   for (const k in h.counts) if (!keep[k]) delete h.counts[k];
