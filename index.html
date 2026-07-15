@@ -110,6 +110,13 @@
     border:1px solid var(--line);color:var(--txt);border-radius:99px;padding:10px 20px;font-size:15px;
     z-index:99;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
   .toast.show{opacity:1}
+  .btn.fin{background:var(--amber);color:#3a2600;margin-top:12px}
+  .jtimer{font-family:'Barlow Condensed';font-weight:700;font-size:34px;text-align:center;margin:2px 0 0;
+    font-variant-numeric:tabular-nums;color:var(--acc)}
+  .jtimer.done{color:var(--amber)}
+  .jtimer.off{color:var(--dim);font-size:16px;font-weight:500}
+  .cd.big{font-size:34px;font-weight:700;letter-spacing:.08em;font-variant-numeric:tabular-nums}
+  .ftime{color:var(--amber);font-size:30px}
   @media(min-width:600px){ .rolegrid{grid-template-columns:repeat(4,1fr)} }
 </style>
 </head>
@@ -136,6 +143,7 @@ function save() { try { localStorage.setItem(LS, JSON.stringify(db)); } catch (e
 const rnd = (n, chars) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 const newCode = () => rnd(5, "ABCDEFGHJKMNPQRSTUVWXYZ23456789");
 const newId = () => "a" + rnd(8, "abcdefghijklmnopqrstuvwxyz0123456789");
+function fmtMs(ms) { if (ms == null) return ""; const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const DEVICE = (() => {
   let d = null;
@@ -146,7 +154,7 @@ const DEVICE = (() => {
 
 function getHeat(code) { return db.heats[code] || null; }
 function ensureHeat(code) {
-  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, athletes: [], counts: {}, metaT: 0 };
+  if (!db.heats[code]) db.heats[code] = { code, name: "", createdAt: Date.now(), closed: false, startAt: null, athletes: [], counts: {}, metaT: 0 };
   return db.heats[code];
 }
 
@@ -250,11 +258,11 @@ function pub(topic, obj) {
   }
 }
 function pubMeta(h) {
-  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, t: h.metaT });
+  pub(TOPIC(h.code) + "/meta", { name: h.name, athletes: h.athletes, closed: !!h.closed, startAt: h.startAt || null, t: h.metaT });
 }
 function pubCount(h, aid) {
   const c = h.counts[aid] || { r: 0, t: 0 };
-  pub(TOPIC(h.code) + "/c/" + aid, { r: c.r, t: c.t, by: DEVICE });
+  pub(TOPIC(h.code) + "/c/" + aid, { r: c.r, t: c.t, fin: (typeof c.fin === "number") ? c.fin : null, by: DEVICE });
 }
 function republishNewer(code) {
   const h = getHeat(code);
@@ -275,13 +283,14 @@ function onMsg(code, topic, payload) {
   if (topic === base + "/meta") {
     if (m.t > (h.metaT || 0)) {
       h.name = m.name || ""; h.closed = !!m.closed;
+      h.startAt = (typeof m.startAt === "number") ? m.startAt : null;
       if (Array.isArray(m.athletes)) h.athletes = m.athletes.filter(a => a && a.id).map(a => ({ id: String(a.id), name: String(a.name || "") }));
       h.metaT = m.t; changed = true;
     }
   } else if (topic.indexOf(base + "/c/") === 0) {
     const aid = topic.slice((base + "/c/").length);
     const cur = h.counts[aid] || { r: 0, t: 0 };
-    if (m.t > cur.t) { h.counts[aid] = { r: Math.max(0, m.r | 0), t: m.t }; changed = true; }
+    if (m.t > cur.t) { h.counts[aid] = { r: Math.max(0, m.r | 0), t: m.t, fin: (typeof m.fin === "number") ? m.fin : null }; changed = true; }
   }
   if (changed) { save(); softRender(); }
 }
@@ -294,12 +303,39 @@ function bumpMeta(h) { h.metaT = nowT(); save(); pubMeta(h); }
 function addRep(code, aid, delta) {
   const h = getHeat(code); if (!h || h.closed) return;
   const cur = h.counts[aid] || { r: 0, t: 0 };
+  if (cur.fin != null) return; // atleta arrivato: conteggio bloccato
   const r = Math.max(0, (cur.r | 0) + delta);
-  h.counts[aid] = { r, t: nowT() };
+  h.counts[aid] = { r, t: nowT(), fin: null };
   save(); pubCount(h, aid);
   if (navigator.vibrate) { try { navigator.vibrate(delta > 0 ? 25 : [50, 40, 50]); } catch (e) {} }
   softRender();
 }
+
+window.startTimer = (code) => {
+  const h = getHeat(code); if (!h || h.closed) return;
+  h.startAt = Date.now(); bumpMeta(h); render();
+};
+window.resetTimer = (code) => {
+  if (!confirm("Azzerare il timer del WOD per tutti?")) return;
+  const h = getHeat(code); if (!h) return;
+  h.startAt = null; bumpMeta(h); render();
+};
+window.finishAth = (code, aid) => {
+  const h = getHeat(code); if (!h || h.closed || !h.startAt) return;
+  const cur = h.counts[aid] || { r: 0, t: 0 };
+  if (cur.fin != null) return;
+  h.counts[aid] = { r: cur.r | 0, t: nowT(), fin: Date.now() - h.startAt };
+  save(); pubCount(h, aid);
+  if (navigator.vibrate) { try { navigator.vibrate([80, 50, 80]); } catch (e) {} }
+  render();
+};
+window.unfinishAth = (code, aid) => {
+  if (!confirm("Annullare l'arrivo di questo atleta?")) return;
+  const h = getHeat(code); if (!h || h.closed) return;
+  const cur = h.counts[aid] || { r: 0, t: 0 };
+  h.counts[aid] = { r: cur.r | 0, t: nowT(), fin: null };
+  save(); pubCount(h, aid); render();
+};
 
 /* ---------- wake lock ---------- */
 let wl = null;
@@ -439,6 +475,14 @@ function vHub(code) {
       <button class="btn sec small" onclick="shareHeat('${code}')">Copia link / condividi</button>
     </div>
     ${waiting ? `<div class="card"><p class="muted">In attesa dei dati dell'heat… Se l'heat esiste, arriveranno appena la connessione è attiva (pallino in alto a destra = live). Altrimenti verifica il codice.</p></div>` : ""}
+    <div class="card" style="text-align:center">
+      ${h.startAt
+        ? `<div class="codebox" style="letter-spacing:.06em" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</div>
+           <p class="muted">Timer WOD in corso</p>
+           ${!h.closed ? `<button class="btn warn small" onclick="resetTimer('${code}')">Azzera timer</button>` : ""}`
+        : (!h.closed ? `<button class="btn" onclick="startTimer('${code}')">▶ START WOD — fai partire il timer</button>
+           <p class="muted" style="margin-top:8px">Parte per tutti i dispositivi: serve per fermare il tempo degli atleti che finiscono.</p>` : "")}
+    </div>
     <div class="rolegrid">
       <div class="role" onclick="nav('h/${code}/judge')"><div class="ic">👨‍⚖️</div><b>Giudice</b><span>conta le rep di un atleta</span></div>
       <div class="role" onclick="nav('h/${code}/board')"><div class="ic">🏆</div><b>Scoreboard</b><span>classifica live per lo schermo</span></div>
@@ -476,27 +520,39 @@ function vJudge(code, aid) {
       ${header("h/" + code)}
       <h2>Chi stai giudicando?</h2>
       <div class="pick">
-        ${h.athletes.map(a => `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
-          <span>${esc(a.name)}</span><span style="color:var(--dim)">${(h.counts[a.id] || { r: 0 }).r} rep</span></button>`).join("") ||
+        ${h.athletes.map(a => {
+          const c = h.counts[a.id] || { r: 0 };
+          return `<button class="btn sec" onclick="nav('h/${code}/judge/${a.id}')">
+          <span>${esc(a.name)}</span><span style="color:var(--dim)">${c.fin != null ? "🏁 " + fmtMs(c.fin) : c.r + " rep"}</span></button>`;
+        }).join("") ||
         '<p class="muted">Nessun atleta ancora. In attesa dei dati dell\'heat…</p>'}
       </div>`;
     return;
   }
   const a = h.athletes.find(x => x.id === aid);
   if (!a) { nav("h/" + code + "/judge"); return; }
-  const r = (h.counts[aid] || { r: 0 }).r;
+  const c = h.counts[aid] || { r: 0 };
+  const fin = c.fin != null;
+  const locked = h.closed || fin;
+  let timerHtml = "";
+  if (fin) timerHtml = `<p class="jtimer done">🏁 ${fmtMs(c.fin)}</p>`;
+  else if (h.startAt) timerHtml = `<p class="jtimer" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</p>`;
+  else timerHtml = `<p class="jtimer off">timer non avviato</p>`;
   app().innerHTML = `
     ${header("h/" + code + "/judge")}
     <p class="jname">${esc(a.name)}</p>
-    <p class="jsub">${esc(h.name || "heat " + code)}${h.closed ? " — HEAT CHIUSO" : ""}</p>
-    <div class="count" id="bigcount">${r}</div>
-    <div class="tapzone ${h.closed ? "locked" : ""}" id="tapzone">
+    <p class="jsub">${esc(h.name || "heat " + code)}${h.closed ? " — HEAT CHIUSO" : (fin ? " — ARRIVATO" : "")}</p>
+    ${timerHtml}
+    <div class="count" id="bigcount">${c.r | 0}</div>
+    <div class="tapzone ${locked ? "locked" : ""}" id="tapzone">
       <div class="flash" id="flash"></div>
       <div class="plus">+1</div>
       <div class="lbl">TOCCA PER CONTARE</div>
     </div>
+    ${h.startAt && !fin && !h.closed ? `<button class="btn fin" onclick="finishAth('${code}','${aid}')">🏁 ARRIVO — ferma il tempo</button>` : ""}
+    ${fin && !h.closed ? `<button class="btn warn" style="margin-top:12px" onclick="unfinishAth('${code}','${aid}')">Annulla arrivo (${fmtMs(c.fin)})</button>` : ""}
     <div class="row" style="margin-top:12px">
-      <button class="btn sec grow" ${h.closed ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
+      <button class="btn sec grow" ${locked ? "disabled" : ""} onclick="addRep('${code}','${aid}',-1)">−1 correzione</button>
       <button class="btn sec small" onclick="nav('h/${code}/judge')">cambia atleta</button>
     </div>`;
   const tz = document.getElementById("tapzone");
@@ -511,19 +567,26 @@ function vJudge(code, aid) {
 function vGrid(code) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
+  const timerTop = h.startAt
+    ? `<span class="cd" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</span>`
+    : (h.closed ? "" : `<button class="btn small" onclick="startTimer('${code}')">▶ START</button>`);
   app().innerHTML = `
     ${header("h/" + code)}
     <div class="bhead"><h2>${esc(h.name || "Heat " + code)}</h2>
-      <span class="cd">${esc(code)}</span>${h.closed ? '<span class="final">CHIUSO</span>' : ""}</div>
+      <span class="cd">${esc(code)}</span>${timerTop}${h.closed ? '<span class="final">CHIUSO</span>' : ""}</div>
     <p class="muted" style="margin:4px 0 12px">Griglia giudici — un pulsante per atleta</p>
     <div class="ggrid">
       ${h.athletes.map(a => {
-        const r = (h.counts[a.id] || { r: 0 }).r;
+        const c = h.counts[a.id] || { r: 0 };
+        const fin = c.fin != null;
+        const lk = h.closed || fin;
         return `<div class="gtile">
           <div class="nm">${esc(a.name)}</div>
-          <div class="ct">${r}</div>
-          <button class="plusb" ${h.closed ? "disabled" : ""} data-aid="${a.id}">+1</button>
-          <button class="minusb" ${h.closed ? "disabled" : ""} onclick="addRep('${code}','${a.id}',-1)">−1 correzione</button>
+          <div class="ct">${fin ? '<span class="ftime">🏁 ' + fmtMs(c.fin) + "</span>" : c.r | 0}</div>
+          <button class="plusb" ${lk ? "disabled" : ""} data-aid="${a.id}">+1</button>
+          ${h.startAt && !fin && !h.closed ? `<button class="minusb" onclick="finishAth('${code}','${a.id}')">🏁 arrivo</button>` : ""}
+          ${fin && !h.closed ? `<button class="minusb" onclick="unfinishAth('${code}','${a.id}')">annulla arrivo</button>` : ""}
+          ${!lk ? `<button class="minusb" onclick="addRep('${code}','${a.id}',-1)">−1 correzione</button>` : ""}
         </div>`;
       }).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
     </div>`;
@@ -536,27 +599,37 @@ function vBoard(code) {
   const h = ensureHeat(code); save();
   ensureSync(code); keepAwake();
   const rows = h.athletes
-    .map(a => ({ id: a.id, name: a.name, r: (h.counts[a.id] || { r: 0 }).r }))
-    .sort((x, y) => y.r - x.r);
+    .map(a => { const c = h.counts[a.id] || { r: 0 }; return { id: a.id, name: a.name, r: c.r | 0, fin: (c.fin != null) ? c.fin : null }; })
+    .sort((x, y) => {
+      if (x.fin != null && y.fin != null) return x.fin - y.fin;
+      if (x.fin != null) return -1;
+      if (y.fin != null) return 1;
+      return y.r - x.r;
+    });
   const max = Math.max(1, ...rows.map(x => x.r));
+  const timerTop = h.startAt
+    ? `<span class="cd big" data-tick="${h.startAt}">${fmtMs(Date.now() - h.startAt)}</span>`
+    : (h.closed ? "" : `<button class="btn small" onclick="startTimer('${code}')">▶ START WOD</button>`);
   app().innerHTML = `
     ${header("h/" + code)}
     <div class="bhead">
       <h2>${esc(h.name || "Heat " + code)}</h2>
       <span class="cd">${esc(code)}</span>
+      ${timerTop}
       ${h.closed ? '<span class="final">FINALE</span>' : ""}
     </div>
-    <p class="muted" style="margin:2px 0 8px">Classifica live</p>
+    <p class="muted" style="margin:2px 0 8px">Classifica live${h.startAt ? " — 🏁 = tempo fermato" : ""}</p>
     ${rows.map((a, i) => `
       <div class="brow p${i + 1}">
         <div class="bar" style="width:${(a.r / max) * 100}%"></div>
         <div class="pos">${i + 1}</div>
         <div class="nm">${esc(a.name)}</div>
-        <div class="rp">${a.r}<small>rep</small></div>
+        <div class="rp">${a.fin != null ? "🏁 " + fmtMs(a.fin) : a.r + '<small>rep</small>'}</div>
       </div>`).join("") || '<p class="muted">Nessun atleta ancora…</p>'}
     <div class="row" style="margin-top:16px">
       <button class="btn sec small grow" onclick="exportCsv('${code}')">⬇ Esporta CSV</button>
       <button class="btn sec small grow" onclick="copyBoard('${code}')">Copia classifica</button>
+      ${h.startAt && !h.closed ? `<button class="btn sec small" onclick="resetTimer('${code}')">azzera timer</button>` : ""}
       <button class="btn sec small" onclick="goFull()">⛶</button>
     </div>`;
 }
@@ -567,12 +640,19 @@ window.goFull = () => {
 };
 function boardRows(code) {
   const h = getHeat(code); if (!h) return [];
-  return h.athletes.map(a => ({ name: a.name, r: (h.counts[a.id] || { r: 0 }).r })).sort((x, y) => y.r - x.r);
+  return h.athletes
+    .map(a => { const c = h.counts[a.id] || { r: 0 }; return { name: a.name, r: c.r | 0, fin: (c.fin != null) ? c.fin : null }; })
+    .sort((x, y) => {
+      if (x.fin != null && y.fin != null) return x.fin - y.fin;
+      if (x.fin != null) return -1;
+      if (y.fin != null) return 1;
+      return y.r - x.r;
+    });
 }
 window.exportCsv = (code) => {
   const h = getHeat(code);
   const rows = boardRows(code);
-  const csv = "Posizione;Atleta;Reps\r\n" + rows.map((a, i) => (i + 1) + ';"' + a.name.replace(/"/g, '""') + '";' + a.r).join("\r\n") + "\r\n";
+  const csv = "Posizione;Atleta;Reps;Tempo\r\n" + rows.map((a, i) => (i + 1) + ';"' + a.name.replace(/"/g, '""') + '";' + a.r + ";" + (a.fin != null ? fmtMs(a.fin) : "")).join("\r\n") + "\r\n";
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
   const aEl = document.createElement("a");
   aEl.href = URL.createObjectURL(blob);
@@ -583,7 +663,7 @@ window.exportCsv = (code) => {
 window.copyBoard = async (code) => {
   const h = getHeat(code);
   const rows = boardRows(code);
-  const txt = (h && h.name ? h.name + "\n" : "") + rows.map((a, i) => (i + 1) + ". " + a.name + " — " + a.r + " rep").join("\n");
+  const txt = (h && h.name ? h.name + "\n" : "") + rows.map((a, i) => (i + 1) + ". " + a.name + " — " + (a.fin != null ? fmtMs(a.fin) : a.r + " rep")).join("\n");
   try { await navigator.clipboard.writeText(txt); toast("Classifica copiata"); } catch (e) { toast("Copia non riuscita"); }
 };
 
@@ -645,6 +725,12 @@ function render() {
 window.nav = nav;
 window.addRep = addRep;
 render();
+setInterval(() => {
+  document.querySelectorAll("[data-tick]").forEach(el => {
+    const st = +el.dataset.tick;
+    if (st) el.textContent = fmtMs(Date.now() - st);
+  });
+}, 250);
 loadLib(() => { if (connCode) connect(connCode); }); // precarica la libreria di sync
 </script>
 </body>
